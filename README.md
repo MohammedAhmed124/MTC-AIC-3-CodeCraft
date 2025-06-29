@@ -65,7 +65,7 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
 
    ```sh
    conda env create -f reproducible_env.yml
-   conda activate mtc-eeg
+   conda activate Competition_environment
    ```
 
    Alternatively, you can install dependencies directly with pip:
