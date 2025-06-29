@@ -7,6 +7,28 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
+
+
+# -----------------------------------------------------------------------------
+# Hey! I'm Mohammed Ahmed Metwally (or just Mohammed A.Metwally 😊), the Team Leader of CodeCraft.
+
+# In this script, we’re jumping into the training process for **Model 1 (MI task)** .
+
+# This script handles everything: preprocessing the EEG data, converting it to PyTorch 
+# tensors, building the model, and training it from scratch.
+
+# The configuration and hyperparameters here were chosen based on our early MI experiments — 
+
+
+# the theory behind the model design, preprocessing steps, or training tricks,
+# is mostly available in our system description paper — we kept this code focused and practical.
+
+# Let’s dive in 
+# -----------------------------------------------------------------------------
+
+
+
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utils.extractors import extract_trial , extract_subject_labels , extract_data
 
@@ -25,6 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 #    - Also extract subject-level labels (e.g., subject ID) from the raw objects
 # -----------------------------------------------------------------------------
 
+print("extracting data for futher preprocessing...",end = "\n\n")
 
 
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +62,6 @@ val_file_paths_mi = glob.glob(os.path.join(DATA_FIF_DIR, "validation/MI/*.fif"))
 
 
 
-print("extracting data...")
 
 mapping_mi = {
     "Left":0,
@@ -101,7 +123,9 @@ test_subject_labels = extract_subject_labels(test_data_mi)
 
 
 from utils.preprocessing import preprocess_data,preprocess_one_file
-print("Preprocessing data...... ")
+print("Preprocessing data, This may take a while... ",end = "\n\n")
+
+
 cols_to_pick = [
         'C3',
         'C4',
@@ -190,8 +214,8 @@ from utils.CustomDataset import EEGDataset
 from utils.augmentation import augment_data
 
 
+print("Data Preparation.... Wrapping preprocessed data inside tensor datasets....",end = "\n\n")
 
-print("creating_dataset....")
 
 batch_size=500
 
@@ -326,4 +350,15 @@ train_model(model_former_curr,
         n_classes=2,
         device = device
     )
+
+
+
+#Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_1_mi_checkpoint/best_model_.pth
+# -----------------------------------------------------------------------------
+# 🙏 Thanks for reading!
+#
+# This marks of the training pipeline for model1 MI.
+# We hope this work contributes meaningfully to the competition and beyond.
+# Good luck, and thank you for your time and attention!
+# -----------------------------------------------------------------------------
 

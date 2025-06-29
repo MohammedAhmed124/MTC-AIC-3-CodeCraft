@@ -1,0 +1,33 @@
+# ==============================================================================
+# ⚠️ WARNING:
+# This project was tested using Python 3.10.8.
+# We highly recommend using Conda to create and manage the environment 
+# for full reproducibility. 
+# Using only pip may result in version mismatches or CUDA incompatibilities.
+# ==============================================================================
+
+
+
+numpy==1.26.4
+pandas==2.3.0
+scikit-learn==1.2.2
+scipy==1.15.2     
+ipython==8.37.0
+
+# PyTorch Stack
+torch==2.7.1
+torchvision==0.22.1
+torchaudio==2.7.1
+torchinfo==1.8.0
+torchview==0.2.7
+torchvis==0.2.0
+torchviz==0.0.3
+
+# MNE
+mne==1.9.0
+mne-features==0.3
+
+# CUDA Tools (pip users must ensure system-level CUDA 12.6 compatibility)
+nvidia-cuda-cupti-cu12==12.6.80
+nvidia-cuda-nvrtc-cu12==12.6.77
+nvidia-cuda-runtime-cu12==12.6.77

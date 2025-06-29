@@ -805,13 +805,6 @@ final_preds_ssvep= predict(
     )
 
 
-
-preds_ssvep_csv = pd.DataFrame({
-    "id":ids_ssvep,
-    "label": pd.Series(final_preds_ssvep).map(inv_mapping_ssvep).values
-})
-
-
 # -----------------------------------------------------------------------------
 #  Final Submission Assembly
 #
@@ -819,6 +812,12 @@ preds_ssvep_csv = pd.DataFrame({
 # - Concatenate MI and SSVEP prediction DataFrames
 # - Sort by ID and save as the final submission CSV
 # -----------------------------------------------------------------------------
+
+preds_ssvep_csv = pd.DataFrame({
+    "id":ids_ssvep,
+    "label": pd.Series(final_preds_ssvep).map(inv_mapping_ssvep).values
+})
+
 
 
 submission = pd.concat([

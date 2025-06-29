@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import einops
 from scipy import signal
 import math
 import argparse
 import sys
-from einops.layers.torch import Rearrange
 
 
 class ConvolutionalAttentionBlock(nn.Module):

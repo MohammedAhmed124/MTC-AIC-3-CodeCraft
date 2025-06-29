@@ -129,9 +129,9 @@ def train_model(model,
         device = torch.device(device)
     
     if os.path.isdir(save_path):
-        print("Path Exists.. Contents of this folder will be modified")
+        print("Path Exists. Contents of this folder will be modified save_path is : ",save_path)
     else:
-        print("Making a new directory..")
+        print("Making a new directory at : ", save_path , " Checkpoints will be saved there. ")
         os.makedirs(save_path, exist_ok=True) 
     domain_lambda_ = domain_lambda
     best_val_metric = float('-inf') # Store balanced accuracy
