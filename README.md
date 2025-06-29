@@ -67,13 +67,19 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
    conda env create -f reproducible_env.yml
    conda activate Competition_environment
    ```
-
+    
    Alternatively, you can install dependencies directly with pip:
 
    ```sh
    pip install -r requirements.txt
    ```
-
+   ==============================================================================
+   ⚠️ WARNING:
+   This project was tested using Python 3.10.8.
+   We highly recommend using Conda to create and manage the environment 
+   for full reproducibility. 
+   Using only pip may result in version mismatches or CUDA incompatibilities.
+   ==============================================================================
 2. **Convert data:**
 
    ```sh
