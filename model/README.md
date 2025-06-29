@@ -1,6 +1,6 @@
 # MTCFormerV3: Multi-Task Convolutional Transformer for EEG
 
-![MTCFormer Architecture](model/Arch.jpeg)
+![MTCFormer Architecture](Arch.jpeg)
 
 ## Overview
 
