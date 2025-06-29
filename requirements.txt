@@ -13,6 +13,9 @@ pandas==2.3.0
 scikit-learn==1.2.2
 scipy==1.15.2     
 ipython==8.37.0
+joblib
+tqdm
+glob2
 
 # PyTorch Stack
 torch==2.7.1
