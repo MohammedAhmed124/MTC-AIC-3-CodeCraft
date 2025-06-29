@@ -60,15 +60,15 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
 
 
 1. **Install dependencies:**
-
-   It is recommended to create your environment from the provided `reproducible_env.yml` for best reproducibility:
-
+   
+   It is recommended to create your environment from this sequence of commands for best reproducibility:
    ```sh
-   conda env create -f reproducible_env.yml
-   conda activate Competition_environment
+    conda create -n Competition_environment python=3.10
+    conda activate Competition_environment
+    pip install -r requirements.txt
    ```
     
-   Alternatively, you can install dependencies directly with pip:
+   If you're not a conda user, you can install dependencies directly with pip:
 
    ```sh
    pip install -r requirements.txt
@@ -79,8 +79,10 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
    We highly recommend using Conda to create and manage the environment 
    for full reproducibility. 
    Using only pip may result in version mismatches or CUDA incompatibilities.
+
+
    
-2. **Convert data:**
+3. **Convert data:**
 
    ```sh
    python convert_csv_to_fif.py --competitions_data_directory <path_to_competition_data>
@@ -92,7 +94,7 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
    python convert_csv_to_fif.py
    ```
 
-3. **Train models:**
+4. **Train models:**
 
    ```sh
    python train/train_mi_model1.py
@@ -101,7 +103,7 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
    python train/train_ssvep_model.py
    ```
 
-4. **Run inference:**
+5. **Run inference:**
 
    By default, inference will use the best model checkpoints. If you want to test models from scratch or use the most recently generated checkpoints, you can pass the `--predict_on_best_models` argument as `False`:
 
