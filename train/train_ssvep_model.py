@@ -15,6 +15,19 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+
+# -----------------------------------------------------------------------------
+# 1. Extract SSVEP task EEG data and labels from MNE .fif files
+# 
+#    - Set paths to training, validation, and test .fif files under data_fif/
+#    - Read each .fif file using MNE and extract raw EEG data and labels
+#    - Labels are extracted from the `description` field in raw annotations
+#    - Class mapping is applied: "Backward" → 0, "Forward" → 1, "Left"→ 2, "Right"→ 3
+#    - Also extract subject-level labels (e.g., subject ID) from the raw objects
+# -----------------------------------------------------------------------------
+
+
+
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 ROOT_PATH = os.path.abspath(os.path.join(SCRIPT_PATH,".."))
 DATA_FIF_DIR = os.path.join(ROOT_PATH,"data_fif")
@@ -47,6 +60,38 @@ train_subject_labels = extract_subject_labels(train_data_ssvep)
 val_subject_labels = extract_subject_labels(val_data_ssvep)
 test_subject_labels = extract_subject_labels(test_data_ssvep)
 
+
+
+# -----------------------------------------------------------------------------
+# 2. Preprocess SSVEP EEG data: apply a sequence of preprocessing operations
+#
+#    For each raw EEG trial (SSVEP task), we apply the following steps:
+#
+#    1. **Notch Filtering**:
+#       - Suppress powerline noise artifacts at 50Hz and 100Hz.
+#       - Notch frequencies = [50, 100] Hz, with width = 1.0 Hz.
+#
+#    2. **Bandpass Filtering**:
+#       - Restrict the EEG signal to the range [8Hz, 14Hz].
+#       - These frequencies are chosen specifically to match the known
+#         SSVEP stimulation frequencies used in the competition setup.
+#
+#    3. **Channel Selection**:
+#       - Pick occipital and parietal channels associated with visual response:
+#         ['OZ', 'PO7', 'PO8', 'PZ', 'Acc_norm', 'gyro_norm', 'Validation']
+#
+#    4. **Windowing**:
+#       - Extract sliding windows of fixed length across each trial.
+#       - Window size = 500 samples, stride = 50 samples.
+#       - This produces overlapping temporal snapshots from each recording.
+#
+#    5. **Normalization**:
+#       - Standardize all numeric channels in each window (mean=0, std=1).
+#       - 'Validation' column is excluded from normalization to preserve its
+#         binary integrity (often used to flag artifact-contaminated windows).
+#
+#    The result is a windowed, preprocessed dataset ready for training.
+# -----------------------------------------------------------------------------
 
 
 from utils.preprocessing import preprocess_data,preprocess_one_file
@@ -101,6 +146,40 @@ test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
 
 
 
+# -----------------------------------------------------------------------------
+# 3. Convert preprocessed EEG windows into PyTorch-ready format
+#
+#    This stage converts numpy arrays from preprocessing into torch Tensors
+#    with correct dtypes and wraps them into PyTorch-compatible Datasets and
+#    DataLoaders. This makes the data pipeline ready for training.
+#
+#    Steps:
+#    -------------------------------------------------------------------------
+#    1. **Torch Conversion**:
+#       - Input data (EEG windows) is cast to `torch.float32`.
+#       - Labels and subject IDs are cast to `torch.long` (required for loss).
+#       - Sample weights are cast to `torch.float32` for possible loss weighting.
+#
+#    2. **Test Data Handling**:
+#       - Since test labels are unknown, placeholder zeros are used for compatibility.
+#
+#    3. **Custom Dataset**:
+#       - We use a custom `EEGDataset` class that wraps:
+#           - EEG windows
+#           - Sample weights
+#           - Class labels
+#           - Subject labels (for subject-level analysis)
+#       - Optional online data augmentation (enabled for training only).
+#
+#    4. **DataLoaders**:
+#       - Train loader uses batching and shuffling for SGD training.
+#       - Val and Test loaders load the full set in one batch for deterministic evaluation.
+#
+#    5. **Device Setup**:
+#       - Automatically selects GPU (`cuda`) if available, otherwise falls back to CPU.
+# -----------------------------------------------------------------------------
+
+
 
 
 from utils.CustomDataset import EEGDataset
@@ -148,6 +227,57 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
+# -----------------------------------------------------------------------------
+# 4. Initialize and train the MTCFormerV3 model on preprocessed SSVEP data
+#
+#    In this stage, we:
+#    - Load the MTCFormerV3 architecture (from model.MTCformerV3)
+#    - Instantiate it with the chosen hyperparameters
+#    - Set up the optimizer, scheduler, and loss function
+#    - Train it using the previously constructed DataLoaders
+#
+#     Model Architecture: `MTCFormer`
+#    -------------------------------------------------------------------------
+#    - depth=1:
+#        - Sets the number of convolutional-attention blocks stacked in the model.
+#        - Controls the depth of temporal feature extraction.
+#    - kernel_size=10:
+#        - Temporal convolutional kernel size for initial feature extraction.
+#    - n_times=500:
+#        - Length of the input sequence (windowed signal).
+#    - chs_num=7:
+#        - Total number of input channels (EEG + sensors).
+#    - eeg_ch_nums=4:
+#        - Number of EEG-only channels (used for channel separation logic).
+#    - class_num=4:
+#        - Number of output classes for the main task (e.g., 4 SSVEP targets).
+#    - class_num_domain=30:
+#        - Number of domain labels (e.g., subjects) — used **only** if domain adaptation is active.
+#    - modulator_kernel_size=10:
+#        - Kernel size for modulator block (learns temporal adaptation).
+#    - Various dropout settings:
+#        - domain_dropout, modulator_dropout, mid_dropout, output_dropout = 0.7
+#        - Encourage regularization at different parts of the model.
+#    - weight_init_std = 0.05, weight_init_mean = 0.0:
+#        - Sets the normal distribution used for weight initialization.
+#
+#     Training Setup:
+#    -------------------------------------------------------------------------
+#    - Optimizer: Adam with learning rate = 0.001
+#    - Loss: CrossEntropyLoss (per-sample) for flexibility with weights or masking
+#    - Scheduler: MultiStepLR with a decay at epoch 250 by factor of 0.1
+#
+#    ❌ Domain Adaptation & Adversarial Training:
+#    -------------------------------------------------------------------------
+#    - `domain_lambda = 0.0`: Domain adaptation is **disabled**
+#    - `adversarial_training = False`: No adversarial defense applied
+#    - This makes the training focus purely on classification with no auxiliary loss
+#
+#    ✅ Early Stopping & Checkpointing:
+#    - Patience: 50 epochs without improvement
+#    - Best model saved to: `train.py_checkpoints/SSVEPCheckpoints`
+# -----------------------------------------------------------------------------
+
 from model.MTCformerV3 import MTCFormer
 from torch.optim.lr_scheduler import *
 from utils.training import train_model , predict
@@ -174,6 +304,7 @@ criterion = CrossEntropyLoss(reduction="none")
 scheduler = MultiStepLR(optimizer, milestones=[250], gamma=0.1)
 
 
+save_path = os.path.join(SCRIPT_PATH,"checkpoints","model_ssvep_checkpoint")
 train_model(model_former,
             train_loader=train_loader,
             val_loader=val_loader,
@@ -184,7 +315,7 @@ train_model(model_former,
             n_epochs=220,
             patience=50,
             scheduler=scheduler,
-            save_path="train.py_checkpoints/SSVEPCheckpoints",
+            save_path=save_path,
             domain_lambda=0.0,
             lambda_scheduler_fn=None,
             adversarial_training=False,

@@ -451,7 +451,7 @@ class MTCFormer(nn.Module):
         
 
         """
-        MTCFormer: Multimodal Temporal Convolutional Transformer for EEG Classification with Domain Adaptation.
+        MTCFormer.
 
         This model is designed for EEG-based classification tasks in settings with domain shift (e.g., different subjects or sessions),
         and features a dual-head structure: one head for task prediction, and another for domain discrimination.

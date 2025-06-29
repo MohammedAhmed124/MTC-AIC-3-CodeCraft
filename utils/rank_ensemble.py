@@ -1,7 +1,7 @@
 from scipy.stats import rankdata
 import numpy as np
 
-def RankAveragingEnsemble(prob_list , weights=None):
+def RankAveragingEnsemble(prob_list , weights=None,probability=False):
         """
     Perform rank-based ensembling on a list of class probability predictions.
 
@@ -37,6 +37,7 @@ def RankAveragingEnsemble(prob_list , weights=None):
                 ranks[:,c]+=  w  *  rankdata(p[:,c],method="average")
 
         ranks = ranks/sum(weights)
-        ranks = ranks/ranks.sum(axis = 1,keepdims=True)
-        rank_preds = np.argmax(ranks,axis = 1)
-        return rank_preds
+        ranks_probs = ranks/ranks.sum(axis = 1,keepdims=True)
+        rank_preds = np.argmax(ranks_probs,axis = 1)
+        returns = rank_preds if not probability else ranks_probs
+        return returns

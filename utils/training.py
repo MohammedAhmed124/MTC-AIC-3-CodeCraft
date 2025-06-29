@@ -5,6 +5,7 @@ import time
 import os
 from sklearn.metrics import f1_score , balanced_accuracy_score
 from .gradient_attack import GradientAttack #Function for gradient attack
+from .rank_ensemble import RankAveragingEnsemble
 import numpy as np
 
 def train_model(model,
@@ -222,7 +223,7 @@ def train_model(model,
 
                 num_original_trials_val = original_val_labels.shape[0]
                 aggregated_outputs = torch.zeros((num_original_trials_val, n_classes), device=device, dtype=torch.float32)
-
+                
                 k = 0 # Counter for original trials
                 for i in range(0, val_outputs_raw.shape[0], int(window_len)):
                     logits = val_outputs_raw[i : i + int(window_len)] # [WINDOW_LEN_GLOBAL, n_classes]
@@ -244,7 +245,7 @@ def train_model(model,
 
                 preds_agg = torch.argmax(aggregated_outputs, dim=1)
                 val_preds.extend(preds_agg.cpu().numpy())
-                val_targets.extend(original_val_labels.cpu().numpy()) # Use original labels for metric calculation
+                val_targets.extend(original_val_labels.cpu().numpy()) # Use original labels for
             
         avg_val_loss = val_loss / len(val_preds) # Use number of aggregated predictions for average loss
         val_f1 = f1_score(val_targets, val_preds, average='weighted')

@@ -14,6 +14,20 @@ from utils.extractors import extract_trial , extract_subject_labels , extract_da
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
+
+
+# -----------------------------------------------------------------------------
+# 1. Extract MI task EEG data and labels from MNE .fif files
+# 
+#    - Set paths to training, validation, and test .fif files under data_fif/
+#    - Read each .fif file using MNE and extract raw EEG data and labels
+#    - Labels are extracted from the `description` field in raw annotations
+#    - Class mapping is applied: "Left" → 0, "Right" → 1
+#    - Also extract subject-level labels (e.g., subject ID) from the raw objects
+# -----------------------------------------------------------------------------
+
+
+
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 ROOT_PATH = os.path.abspath(os.path.join(SCRIPT_PATH,".."))
 DATA_FIF_DIR = os.path.join(ROOT_PATH,"data_fif")
@@ -46,6 +60,44 @@ val_labels_mi_mapped = np.array([mapping_mi[x] for x in val_labels_mi])
 train_subject_labels = extract_subject_labels(train_data_mi)
 val_subject_labels = extract_subject_labels(val_data_mi)
 test_subject_labels = extract_subject_labels(test_data_mi)
+
+
+
+# -----------------------------------------------------------------------------
+# 2. Preprocess EEG data: we apply sequential preprocessing steps to each recording here
+#
+#    For each raw EEG trial, we apply the following pipeline:
+#
+#    1. **Notch Filtering**:
+#       - Remove powerline noise at 50Hz and its harmonic at 100Hz.
+#       - Frequencies removed: [50Hz, 100Hz] with notch width = 1.0 Hz.
+#
+#    2. **Bandpass Filtering**:
+#       - Retain signal components in the frequency band [6Hz, 30Hz].
+#       - Removes both slow drifts and high-frequency muscle artifacts.
+#
+#    3. **Channel Picking**:
+#       - Extract a selected subset of relevant EEG and sensor channels:
+#         ['C3', 'C4', 'CZ', 'FZ', 'Acc_norm', 'gyro_norm', 'Validation']
+#       - EEG channels capture motor imagery; motion sensors help for artifacts.
+#       - The columns were specifcally chosesn based on research.
+#
+#    4. **Windowing**:
+#       - Extract fixed-length windows from each trial with stride. primarily to increase the number of training examples.
+#       - Window size = 600 samples, stride = 35 samples.
+#       - Allows multiple overlapping snapshots per trial to increase data.
+#
+#    5. **Normalization**:
+#       - Each channel is standardized (mean=0, std=1) per window.
+#       - The 'Validation' column is excluded from normalization
+#         to preserve its binary nature (indicates valid vs. artifact).
+#
+#    Outputs:
+#      - Preprocessed windowed data
+#      - Class labels per window
+#      - Subject labels per window (for subject-wise CV)
+#      - Window weights (optional, for loss weighting or sample quality)
+# -----------------------------------------------------------------------------
 
 
 
@@ -101,6 +153,39 @@ test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
     )
 
 
+# -----------------------------------------------------------------------------
+# 3. Convert preprocessed EEG windows into PyTorch-ready format
+#
+#    This stage converts numpy arrays from preprocessing into torch Tensors
+#    with correct dtypes and wraps them into PyTorch-compatible Datasets and
+#    DataLoaders. This makes the data pipeline ready for training.
+#
+#    Steps:
+#    -------------------------------------------------------------------------
+#    1. **Torch Conversion**:
+#       - Input data (EEG windows) is cast to `torch.float32`.
+#       - Labels and subject IDs are cast to `torch.long` (required for loss).
+#       - Sample weights are cast to `torch.float32` for possible loss weighting.
+#
+#    2. **Test Data Handling**:
+#       - Since test labels are unknown, placeholder zeros are used for compatibility.
+#
+#    3. **Custom Dataset**:
+#       - We use a custom `EEGDataset` class that wraps:
+#           - EEG windows
+#           - Sample weights
+#           - Class labels
+#           - Subject labels (for subject-level analysis)
+#       - Optional online data augmentation (enabled for training only).
+#
+#    4. **DataLoaders**:
+#       - Train loader uses batching and shuffling for SGD training.
+#       - Val and Test loaders load the full set in one batch for deterministic evaluation.
+#
+#    5. **Device Setup**:
+#       - Automatically selects GPU (`cuda`) if available, otherwise falls back to CPU.
+# -----------------------------------------------------------------------------
+
 
 from utils.CustomDataset import EEGDataset
 from utils.augmentation import augment_data
@@ -147,6 +232,61 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
+# -----------------------------------------------------------------------------
+# 4. Train MTCFormerV3 for Motor Imagery (MI) classification
+#
+#    In this configuration, we:
+#    - Instantiate a deeper version of the MTCFormer model (depth=2)
+#    - Use longer EEG windows (n_times = 600)
+#    - Set up the optimizer, scheduler, and weighted loss
+#    - Enable domain adaptation (via non-zero domain_lambda)
+#    - Save model checkpoints during training
+#
+#     Model Configuration:
+#    -------------------------------------------------------------------------
+#    - depth = 2:
+#        - Stacks two convolutional-attention blocks to capture deeper temporal dependencies.
+#    - kernel_size = 5:
+#        - Shorter temporal kernel than SSVEP config for finer-grained local patterns.
+#    - n_times = 600:
+#        - Input sequence length (600 samples per window).
+#    - chs_num = 7:
+#        - Total number of channels (EEG + motion + validation marker).
+#    - eeg_ch_nums = 4:
+#        - EEG-only channels among the 7 inputs.
+#    - class_num = 2:
+#        - Binary classification (e.g., Left vs Right Motor Imagery).
+#    - class_num_domain = 30:
+#        - Total domain labels (used if domain adaptation is enabled).
+#    - Dropout:
+#        - modulator_dropout = 0.3
+#        - mid_dropout = 0.5
+#        - output_dropout = 0.5
+#        - Helps regularize intermediate and output layers.
+#    - Weight Initialization:
+#        - Mean = 0, Std = 0.5 (heavier variance to allow broader exploration).
+#
+#     Training Details:
+#    -------------------------------------------------------------------------
+#    - Optimizer: Adam with learning rate = 0.002
+#    - Loss: CrossEntropyLoss with "none" reduction for weighted training
+#    - LR Scheduler: MultiStepLR with decay at epoch 70 by factor of 0.1
+#
+#    ✅ Domain Adaptation:
+#    - `domain_lambda = 0.01`: Enables domain adaptation loss with low weight.
+#    - `lambda_scheduler_fn = None`: The lambda stays fixed at 0.01.
+#
+#    ❌ Adversarial Training:
+#    - `adversarial_training = False`: No adversarial defense is used.
+#
+#     Training Strategy:
+#    - n_epochs = 200
+#    - Early stopping with patience = 100 epochs
+#    - Model checkpoint saved only if validation improves
+#    - Checkpoint path: train.py_checkpoints/MI_Checkpoints/model3
+# -----------------------------------------------------------------------------
+
+
 from model.MTCformerV3 import MTCFormer
 from utils.training import train_model , predict
 from torch.optim.lr_scheduler import *
@@ -173,7 +313,7 @@ scheduler = MultiStepLR(optimizer, milestones=[70], gamma=0.1)
 
 
 
-save_path = os.path.join(SCRIPT_PATH,"train.py_checkpoints","MI_Checkpoints","model3")
+save_path = os.path.join(SCRIPT_PATH,"checkpoints","model_3_mi_checkpoint")
 train_model(model_former,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -181,8 +321,8 @@ train_model(model_former,
         optimizer=optimizer,
         window_len=WINDOW_LEN,
         original_val_labels=orig_labels_val_torch,
-        n_epochs=500,
-        patience=2000,
+        n_epochs=200,
+        patience=100,
         scheduler=scheduler,
         domain_lambda=0.01,
         lambda_scheduler_fn=None,

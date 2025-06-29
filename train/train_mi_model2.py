@@ -16,6 +16,19 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 
+
+# -----------------------------------------------------------------------------
+# 1. Extract MI task EEG data and labels from MNE .fif files
+# 
+#    - Set paths to training, validation, and test .fif files under data_fif/
+#    - Read each .fif file using MNE and extract raw EEG data and labels
+#    - Labels are extracted from the `description` field in raw annotations
+#    - Class mapping is applied: "Left" → 0, "Right" → 1
+#    - Also extract subject-level labels (e.g., subject ID) from the raw objects
+# -----------------------------------------------------------------------------
+
+
+
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 ROOT_PATH = os.path.abspath(os.path.join(SCRIPT_PATH,".."))
 DATA_FIF_DIR = os.path.join(ROOT_PATH,"data_fif")
@@ -49,6 +62,43 @@ train_subject_labels = extract_subject_labels(train_data_mi)
 val_subject_labels = extract_subject_labels(val_data_mi)
 test_subject_labels = extract_subject_labels(test_data_mi)
 
+
+
+# -----------------------------------------------------------------------------
+# 2. Preprocess EEG data: we apply sequential preprocessing steps to each recording here
+#
+#    For each raw EEG trial, we apply the following pipeline:
+#
+#    1. **Notch Filtering**:
+#       - Remove powerline noise at 50Hz and its harmonic at 100Hz.
+#       - Frequencies removed: [50Hz, 100Hz] with notch width = 1.0 Hz.
+#
+#    2. **Bandpass Filtering**:
+#       - Retain signal components in the frequency band [6Hz, 30Hz].
+#       - Removes both slow drifts and high-frequency muscle artifacts.
+#
+#    3. **Channel Picking**:
+#       - Extract a selected subset of relevant EEG and sensor channels:
+#         ['C3', 'C4', 'CZ', 'FZ', 'Acc_norm', 'gyro_norm', 'Validation']
+#       - EEG channels capture motor imagery; motion sensors help for artifacts.
+#       - The columns were specifcally chosesn based on research.
+#
+#    4. **Windowing**:
+#       - Extract fixed-length windows from each trial with stride. primarily to increase the number of training examples.
+#       - Window size = 1200 samples, stride = 35 samples.
+#       - Allows multiple overlapping snapshots per trial to increase data.
+#
+#    5. **Normalization**:
+#       - Each channel is standardized (mean=0, std=1) per window.
+#       - The 'Validation' column is excluded from normalization
+#         to preserve its binary nature (indicates valid vs. artifact).
+#
+#    Outputs:
+#      - Preprocessed windowed data
+#      - Class labels per window
+#      - Subject labels per window (for subject-wise CV)
+#      - Window weights (optional, for loss weighting or sample quality)
+# -----------------------------------------------------------------------------
 
 
 import logging
@@ -103,6 +153,38 @@ test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
 
 
 
+# -----------------------------------------------------------------------------
+# 3. Convert preprocessed EEG windows into PyTorch-ready format
+#
+#    This stage converts numpy arrays from preprocessing into torch Tensors
+#    with correct dtypes and wraps them into PyTorch-compatible Datasets and
+#    DataLoaders. This makes the data pipeline ready for training.
+#
+#    Steps:
+#    -------------------------------------------------------------------------
+#    1. **Torch Conversion**:
+#       - Input data (EEG windows) is cast to `torch.float32`.
+#       - Labels and subject IDs are cast to `torch.long` (required for loss).
+#       - Sample weights are cast to `torch.float32` for possible loss weighting.
+#
+#    2. **Test Data Handling**:
+#       - Since test labels are unknown, placeholder zeros are used for compatibility.
+#
+#    3. **Custom Dataset**:
+#       - We use a custom `EEGDataset` class that wraps:
+#           - EEG windows
+#           - Sample weights
+#           - Class labels
+#           - Subject labels (for subject-level analysis)
+#       - Optional online data augmentation (enabled for training only).
+#
+#    4. **DataLoaders**:
+#       - Train loader uses batching and shuffling for SGD training.
+#       - Val and Test loaders load the full set in one batch for deterministic evaluation.
+#
+#    5. **Device Setup**:
+#       - Automatically selects GPU (`cuda`) if available, otherwise falls back to CPU.
+# -----------------------------------------------------------------------------
 
 from utils.CustomDataset import EEGDataset
 from utils.augmentation import augment_data
@@ -143,6 +225,62 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
+# -----------------------------------------------------------------------------
+# 4. Train MTCFormerV3 for Motor Imagery (MI) with adversarial training enabled
+#
+#    In this configuration, we:
+#    - Instantiate a deeper MTCFormer model (depth=3) with longer temporal windows
+#    - Enable both domain adaptation and adversarial training
+#    - Train for up to 500 epochs with early stopping and learning rate decay
+#
+#    📌 Model Configuration:
+#    -------------------------------------------------------------------------
+#    - depth = 3:
+#        - Uses 3 convolutional-attention blocks for deeper temporal modeling
+#    - kernel_size = 10:
+#        - Large temporal kernel for broad temporal feature extraction
+#    - n_times = 1200:
+#        - Input window size: 1200 time steps per sample
+#    - chs_num = 7:
+#        - Total number of input channels (EEG + motion + marker)
+#    - eeg_ch_nums = 4:
+#        - Number of EEG-only channels
+#    - class_num = 2:
+#        - Binary classification (e.g., Left vs Right MI)
+#    - class_num_domain = 30:
+#        - Number of domain classes (e.g., subject IDs)
+#    - Dropouts:
+#        - modulator_dropout = 0.3
+#        - mid_dropout = 0.5
+#        - output_dropout = 0.5
+#    - Weight initialization:
+#        - mean = 0, std = 0.5 (wide initial variance)
+#
+#     Training Setup:
+#    -------------------------------------------------------------------------
+#    - Optimizer: Adam with learning rate = 0.002
+#    - Loss: CrossEntropyLoss (reduction="none") to support sample weights
+#    - Scheduler: MultiStepLR with decay at epoch 300 by factor of 0.1
+#
+#    ✅ Domain Adaptation:
+#    - domain_lambda = 0.01: Domain loss is active and weighted modestly
+#    - lambda_scheduler_fn = None: Domain loss weight remains fixed
+#
+#    ✅ Adversarial Training:
+#    - adversarial_training = True: Adversarial defense is enabled
+#    - adversarial_alpha = 0.01: Step size for adversarial gradient ascent
+#    - adversarial_epsilon = 0.01: Max allowed perturbation per step
+#    - adversarial_factor = 0.4: Weight of adversarial loss term
+#    - adversarial_steps = 1: One-step Fast Gradient Sign Method (FGSM-like)
+#
+#     Training Strategy:
+#    - n_epochs = 500
+#    - Early stopping patience = 25 epochs
+#    - Model saved only when validation improves
+#    - Checkpoints saved to: train.py_checkpoints/MI_Checkpoints/model2
+# -----------------------------------------------------------------------------
+
+
 from model.MTCformerV3 import MTCFormer
 from utils.training import train_model , predict
 from torch.optim.lr_scheduler import *
@@ -165,9 +303,9 @@ model_former = MTCFormer(depth=3,
 
 optimizer = Adam(model_former.parameters(), lr=0.002)
 criterion = CrossEntropyLoss(reduction="none")
-scheduler = MultiStepLR(optimizer, milestones=[60], gamma=0.1)
+scheduler = MultiStepLR(optimizer, milestones=[300], gamma=0.1)
 
-save_path = os.path.join(SCRIPT_PATH,"train.py_checkpoints","MI_Checkpoints","model2")
+save_path = os.path.join(SCRIPT_PATH,"checkpoints","model_2_mi_checkpoint")
 best_epoch = train_model(model_former,
                 train_loader=train_loader,
                 val_loader=val_loader,
@@ -175,8 +313,8 @@ best_epoch = train_model(model_former,
                 optimizer=optimizer,
                 window_len=WINDOW_LEN,
                 original_val_labels=orig_labels_val_torch,
-                n_epochs=500,
-                patience=25,
+                n_epochs=250,
+                patience=100,
                 scheduler=scheduler,
                 domain_lambda=0.01,
                 lambda_scheduler_fn=None,

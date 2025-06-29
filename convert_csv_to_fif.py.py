@@ -8,10 +8,13 @@ import argparse
 import shutil
 
 parser = argparse.ArgumentParser()
+
+SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
+defualt_data_path = os.path.join(SCRIPT_PATH,"data")
 parser.add_argument(
     "--competitions_data_directory",
     type=str,
-    default="data",
+    default=defualt_data_path,
     help="Path to the directory containing the competition data"
 )
 args = parser.parse_args()
@@ -204,16 +207,16 @@ def save_data_as_fif(df,base_path="data_fif/", data_type="train"):
     mne.set_log_level("INFO")
                 
 
-
+base_path = os.path.join(SCRIPT_PATH,"data_fif")
 save_data_as_fif(train_labels.sort_values(by=["task","trial_session"])
-                 ,base_path="data_fif/"
+                 ,base_path=base_path
                  , data_type="train")
 
 save_data_as_fif(validation_labels.sort_values(by=["task","trial_session"])
-                 ,base_path="data_fif/"
+                 ,base_path=base_path
                  , data_type="validation")
 
 
 save_data_as_fif(test_labels.sort_values(by=["task","trial_session"])
-                 ,base_path="data_fif/"
+                 ,base_path=base_path
                  , data_type="test")
