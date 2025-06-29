@@ -11,6 +11,7 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 │   └── inference.py              # Full inference pipeline for MI and SSVEP
 ├── model/
 │   └── MTCformerV3.py            # MTCFormer model definition
+│   └── README.md                 # Model architecture details and diagram
 ├── data/
 │    ├── MI/
 |    ├── SSVEP/
@@ -33,7 +34,7 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 │   └── training.py               # Training and prediction utilities
 ├── checkpoints/                  # Model checkpoints (created during training)
 ├── requirements.txt              # Python dependencies
-├── reproducible_env.yml          # Conda dependencies
+├── reproducible_env.yml          # Conda reproducible environment file
 ├── submission.csv                # Example submission file
 └── README.md                     # Project documentation
 ```
@@ -111,6 +112,8 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
 - Model checkpoints are saved in the `checkpoints` directory.
 - Custom datasets and data loaders are implemented in `utils/CustomDataset.py`.
 - Training and evaluation utilities are in `utils/training.py`.
+- **Model architecture details and diagram are available in [`model/README.md`](model/README.md).**
+
 
 ## Citation
 
