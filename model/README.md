@@ -3,7 +3,7 @@
 ![MTCFormer Architecture](Arch.jpeg)
 
 ## Overview
-
+We are happy to introduce MTCFormer, our custom-designed architecture tailored for EEG classification tasks. Built with domain adaptation in mind.
 `MTCFormerV3.py` implements the MTCFormer model, a deep learning architecture designed for EEG-based classification tasks, especially in scenarios with domain shift (e.g., different subjects or sessions). The model is built for both task prediction and domain adaptation, making it robust for real-world EEG competitions and research.
 
 ## Key Features
