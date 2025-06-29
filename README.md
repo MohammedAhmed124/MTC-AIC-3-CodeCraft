@@ -33,6 +33,7 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 │   └── training.py               # Training and prediction utilities
 ├── checkpoints/                  # Model checkpoints (created during training)
 ├── requirements.txt              # Python dependencies
+├── reproducible_env.yml          # Conda dependencies
 ├── submission.csv                # Example submission file
 └── README.md                     # Project documentation
 ```
@@ -40,8 +41,9 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 ## Main Components
 
 - **Data Conversion:**
-  Use `convert_csv_to_fif.py` to convert raw competition CSV files into `.fif` format for efficient processing with [MNE](https://mne.tools/).
-
+Easily convert your raw competition CSV files to the efficient `.fif` format for MNE processing using the `convert_csv_to_fif.py` script.
+**Tip:** If your competition data is already in a folder named `data`, simply run the script without arguments—it will automatically use that directory.
+  
 - **Preprocessing & Augmentation:**
   Utilities in `utils/preprocessing.py` and `utils/augmentation.py` handle signal cleaning and data augmentation.
 
@@ -55,7 +57,17 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 
 ## Getting Started
 
+
 1. **Install dependencies:**
+
+   It is recommended to create your environment from the provided `reproducible_env.yml` for best reproducibility:
+
+   ```sh
+   conda env create -f reproducible_env.yml
+   conda activate mtc-eeg
+   ```
+
+   Alternatively, you can install dependencies directly with pip:
 
    ```sh
    pip install -r requirements.txt
@@ -65,6 +77,12 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 
    ```sh
    python convert_csv_to_fif.py --competitions_data_directory <path_to_competition_data>
+   ```
+
+   If your data is in the `data` directory, you do not need to pass any arguments:
+
+   ```sh
+   python convert_csv_to_fif.py
    ```
 
 3. **Train models:**
@@ -78,11 +96,15 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 
 4. **Run inference:**
 
+   By default, inference will use the best model checkpoints. If you want to test models from scratch or use the most recently generated checkpoints, you can pass the `--predict_on_best_models` argument as `False`:
+
    ```sh
    python inference/inference.py
+   # or, to use non-best checkpoints:
+   python inference/inference.py --predict_on_best_models False
    ```
 
-   The output will be saved as `submission.csv`.
+   The output will be saved as `submission.csv` (or `submission_regenerated_(non_best).csv` if using non-best checkpoints).
 
 ## Notes
 
