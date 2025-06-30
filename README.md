@@ -60,26 +60,32 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
 
 
 1. **Install dependencies:**
+
+   ⚠️ WARNING:
+   This project was tested using Python 3.10.8.
+   We highly recommend using Conda to create and manage the environment 
+   for full reproducibility. 
+   Using only pip may result in version mismatches or CUDA incompatibilities.
    
-   It is recommended to create your environment from this sequence of commands for best reproducibility:
+   Option 1: It is recommended to create your environment from this sequence of commands for best reproducibility:
    ```sh
     conda create -n Competition_environment python=3.10
     conda activate Competition_environment
     pip install -r requirements.txt
    ```
     
-   If you're not a conda user, you can install dependencies directly with pip:
+   Option 2: If you're not a conda user, you can install dependencies directly with pip:
 
    ```sh
    pip install -r requirements.txt
    ```
   
-   ⚠️ WARNING:
-   This project was tested using Python 3.10.8.
-   We highly recommend using Conda to create and manage the environment 
-   for full reproducibility. 
-   Using only pip may result in version mismatches or CUDA incompatibilities.
 
+   Option 3: 
+   ```sh
+   conda env create -f environment.yml
+   conda activate Competition_environment
+   ```
 
    
 3. **Convert data:**
