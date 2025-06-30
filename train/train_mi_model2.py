@@ -11,6 +11,9 @@ from torch.utils.data import DataLoader
 
 
 
+
+
+
 # -----------------------------------------------------------------------------
 # Hey! I'm Mohammed Ahmed Metwally (or just Mohammed A.Metwally 😊), the Team Leader of CodeCraft.
 
@@ -41,7 +44,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 
-
 # -----------------------------------------------------------------------------
 # 1. We Extract MI task EEG data and labels from MNE .fif files
 # 
@@ -53,10 +55,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # -----------------------------------------------------------------------------
 
 print("extracting data for futher preprocessing...",end = "\n\n")
-
-
-
-
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 ROOT_PATH = os.path.abspath(os.path.join(SCRIPT_PATH,".."))
 DATA_FIF_DIR = os.path.join(ROOT_PATH,"data_fif")
@@ -131,7 +129,6 @@ if TEST_MODE:
     train_data_mi = train_data_mi[:50]
     train_labels_mi_mapped = train_labels_mi_mapped[:50]
 
-
 # -----------------------------------------------------------------------------
 # 2. Preprocess EEG data: we apply sequential preprocessing steps to each recording here
 #
@@ -153,7 +150,7 @@ if TEST_MODE:
 #
 #    4. **Windowing**:
 #       - Extract fixed-length windows from each trial with stride. primarily to increase the number of training examples.
-#       - Window size = 1200 samples, stride = 35 samples.
+#       - Window size = 600 samples, stride = 35 samples.
 #       - Allows multiple overlapping snapshots per trial to increase data.
 #
 #    5. **Normalization**:
@@ -169,9 +166,11 @@ if TEST_MODE:
 # -----------------------------------------------------------------------------
 
 
+
 import logging
 from utils.preprocessing import preprocess_data,preprocess_one_file
 print("Preprocessing data, This may take a while... ",end = "\n\n")
+
 
 
 cols_to_pick = [
@@ -190,7 +189,7 @@ params = {
     "h_freq": 30,
     "notch_freqs": [50, 100],
     "notch_width": 1.0,
-    "window_size": 1200,
+    "window_size": 600,
     "window_stride": 35
 }
 train_data,weights_train,windowed_train_labels,subject_label_train_, WINDOW_LEN = preprocess_data(
@@ -219,9 +218,6 @@ test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
     params = params,
     n_jobs=4
     )
-
-
-
 
 
 # -----------------------------------------------------------------------------
@@ -257,15 +253,17 @@ test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
 #       - Automatically selects GPU (`cuda`) if available, otherwise falls back to CPU.
 # -----------------------------------------------------------------------------
 
+
 from utils.CustomDataset import EEGDataset
 from utils.augmentation import augment_data
 
 print("Data Preparation.... Wrapping preprocessed data inside tensor datasets....",end = "\n\n")
 
+
 if TEST_MODE:
     batch_size=10
 else:
-    batch_size=100
+    batch_size=125
 
 # Convert numpy arrays to PyTorch tensors with correct dtypes
 orig_labels_val_torch = torch.from_numpy(val_labels_mi_mapped).to(torch.long) # Original labels for validation aggregation
@@ -298,63 +296,67 @@ val_loader = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False) # Full batch for test
 
 
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
+
+
+
 # -----------------------------------------------------------------------------
-# 4. Train MTCFormerV3 for Motor Imagery (MI) with adversarial training enabled
+# 4. Train MTCFormerV3 for Motor Imagery (MI) classification
 #
 #    In this configuration, we:
-#    - Instantiate a deeper MTCFormer model (depth=3) with longer temporal windows
-#    - Enable both domain adaptation and adversarial training
-#    - Train for up to 500 epochs with early stopping and learning rate decay
+#    - Instantiate a deeper version of the MTCFormer model (depth=2)
+#    - Use longer EEG windows (n_times = 600)
+#    - Set up the optimizer, scheduler, and weighted loss
+#    - Enable domain adaptation (via non-zero domain_lambda)
+#    - Save model checkpoints during training
 #
-#    📌 Model Configuration:
+#     Model Configuration:
 #    -------------------------------------------------------------------------
-#    - depth = 3:
-#        - Uses 3 convolutional-attention blocks for deeper temporal modeling
-#    - kernel_size = 10:
-#        - Large temporal kernel for broad temporal feature extraction
-#    - n_times = 1200:
-#        - Input window size: 1200 time steps per sample
+#    - depth = 2:
+#        - Stacks two convolutional-attention blocks to capture deeper temporal dependencies.
+#    - kernel_size = 5:
+#        - Shorter temporal kernel than SSVEP config for finer-grained local patterns.
+#    - n_times = 600:
+#        - Input sequence length (600 samples per window).
 #    - chs_num = 7:
-#        - Total number of input channels (EEG + motion + marker)
+#        - Total number of channels (EEG + motion + validation marker).
 #    - eeg_ch_nums = 4:
-#        - Number of EEG-only channels
+#        - EEG-only channels among the 7 inputs.
 #    - class_num = 2:
-#        - Binary classification (e.g., Left vs Right MI)
+#        - Binary classification (e.g., Left vs Right Motor Imagery).
 #    - class_num_domain = 30:
-#        - Number of domain classes (e.g., subject IDs)
-#    - Dropouts:
+#        - Total domain labels (used if domain adaptation is enabled).
+#    - Dropout:
 #        - modulator_dropout = 0.3
 #        - mid_dropout = 0.5
 #        - output_dropout = 0.5
-#    - Weight initialization:
-#        - mean = 0, std = 0.5 (wide initial variance)
+#        - Helps regularize intermediate and output layers.
+#    - Weight Initialization:
+#        - Mean = 0, Std = 0.5 (heavier variance to allow broader exploration).
 #
-#     Training Setup:
+#     Training Details:
 #    -------------------------------------------------------------------------
 #    - Optimizer: Adam with learning rate = 0.002
-#    - Loss: CrossEntropyLoss (reduction="none") to support sample weights
-#    - Scheduler: MultiStepLR with decay at epoch 300 by factor of 0.1
+#    - Loss: CrossEntropyLoss with "none" reduction for weighted training
+#    - LR Scheduler: MultiStepLR with decay at epoch 70 by factor of 0.1
 #
 #    ✅ Domain Adaptation:
-#    - domain_lambda = 0.01: Domain loss is active and weighted modestly
-#    - lambda_scheduler_fn = None: Domain loss weight remains fixed
+#    - `domain_lambda = 0.01`: Enables domain adaptation loss with low weight.
+#    - `lambda_scheduler_fn = None`: The lambda stays fixed at 0.01.
 #
-#    ✅ Adversarial Training:
-#    - adversarial_training = True: Adversarial defense is enabled
-#    - adversarial_alpha = 0.01: Step size for adversarial gradient ascent
-#    - adversarial_epsilon = 0.01: Max allowed perturbation per step
-#    - adversarial_factor = 0.4: Weight of adversarial loss term
-#    - adversarial_steps = 1: One-step Fast Gradient Sign Method (FGSM-like)
+#    ❌ Adversarial Training:
+#    - `adversarial_training = False`: No adversarial defense is used.
 #
 #     Training Strategy:
-#    - n_epochs = 500
-#    - Early stopping patience = 25 epochs
-#    - Model saved only when validation improves
-#    - Checkpoints saved to: train.py_checkpoints/MI_Checkpoints/model2
+#    - n_epochs = 200
+#    - Early stopping with patience = 100 epochs
+#    - Model checkpoint saved only if validation improves
+#    - Checkpoint path: train.py_checkpoints/MI_Checkpoints/model3
 # -----------------------------------------------------------------------------
 
 
@@ -363,9 +365,9 @@ from utils.training import train_model , predict
 from torch.optim.lr_scheduler import *
 
 
-model_former = MTCFormer(depth=3,
-                    kernel_size=10,
-                    n_times=1200,
+model_former = MTCFormer(depth=2,
+                    kernel_size=5,
+                    n_times=600,
                     chs_num=7,
                     eeg_ch_nums=4,
                     class_num=2,
@@ -380,34 +382,31 @@ model_former = MTCFormer(depth=3,
 
 optimizer = Adam(model_former.parameters(), lr=0.002)
 criterion = CrossEntropyLoss(reduction="none")
-scheduler = MultiStepLR(optimizer, milestones=[300], gamma=0.1)
+scheduler = MultiStepLR(optimizer, milestones=[70], gamma=0.1)
+
+
 
 save_path = os.path.join(SCRIPT_PATH,"checkpoints","model_2_mi_checkpoint")
-best_epoch = train_model(model_former,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                criterion=criterion,
-                optimizer=optimizer,
-                window_len=WINDOW_LEN,
-                original_val_labels=orig_labels_val_torch,
-                n_epochs=250,
-                patience=100,
-                scheduler=scheduler,
-                domain_lambda=0.01,
-                lambda_scheduler_fn=None,
-                adversarial_training=True,
-                adversarial_alpha=0.01,
-                adversarial_epsilon=0.01,
-                adversarial_factor=0.4,
-                adversarial_steps=1,
-                save_path = save_path,
-                device = device,
-                save_best_only=True,
-                n_classes=2
-                )
+train_model(model_former,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        window_len=WINDOW_LEN,
+        original_val_labels=orig_labels_val_torch,
+        n_epochs=200,
+        patience=100,
+        scheduler=scheduler,
+        domain_lambda=0.01,
+        lambda_scheduler_fn=None,
+        adversarial_training=False,
+        save_path = save_path,
+        device = device,
+        save_best_only=True,
+        n_classes=2
+        )
 
-
-#Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_2_mi_checkpoint/best_model_.pth
+#Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_3_mi_checkpoint/best_model_.pth
 # -----------------------------------------------------------------------------
 # 🙏 Thanks for reading!
 #

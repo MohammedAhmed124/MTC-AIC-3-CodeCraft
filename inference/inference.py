@@ -121,14 +121,12 @@ print(
 
 
 # -----------------------------------------------------------------------------
-#  Inference for Motor Imagery (MI) - Ensemble of Multiple MTCFormer Models
+#  Inference for Motor Imagery (MI) - Ensemble of 2 MTCFormer Models
 #
-# In this section, we will perform inference on the MI task using three different
+# In this section, we will perform inference on the MI task using 2 different
 # MTCFormer models. Each of these models was trained with different settings:
-# - Some are deeper, some use longer EEG windows
-# - A few were trained with domain adaptation or adversarial training enabled
 #
-# Instead of relying on just one model’s predictions, I combine all three using
+# Instead of relying on just one model’s predictions, I combine all 2 using
 # a technique called **Rank Averaging**. The idea here is simple but powerful:
 #   → Each model gives me probabilities over the classes (shape: N, C)
 #   → I rank those probabilities for each model (higher means more confident)
@@ -318,142 +316,16 @@ preds_mi_one = predict(
 
 
 
-# -----------------------------------------------------------------------------
-#  Model 2 – Inference for MI using a Deeper MTCFormer (depth=3, window=1200)
-#
-# This is the second model in our MI ensemble.
-# Compared to the first model, this one goes deeper and looks at longer windows
-# of EEG data, allowing it to capture more complex temporal dynamics.
-#
-#  Model Architecture:
-# - depth = 3 → deeper architecture with three stacked attention-conv blocks
-# - kernel_size = 10 → wider temporal receptive fields
-# - input window = 1200 time steps (vs. 600 before)
-# - Regularization through dropout remains moderate
-#
-#  Checkpoint Loading:
-# - We load the pre-trained weights from its dedicated checkpoint
-# - `strict=False` allows flexibility if state dict keys vary slightly
-#
-#  Preprocessing Pipeline:
-# - Uses the same channels as before: ['C3', 'C4', 'CZ', 'FZ'] + motion + validation
-# - Preprocessing steps:
-#     1. Notch filtering at 50 and 100 Hz
-#     2. Bandpass filtering in the 6–30 Hz Motor Imagery range
-#     3. Channel picking
-#     4. Windowing: this time, windows are 1200 time steps long (covering more time)
-#     5. Normalization, skipping the 'Validation' marker to preserve its logic
-#
-#  Data Wrapping:
-# - The preprocessed arrays are converted into tensors
-# - We use the `EEGDataset` wrapper to structure inputs for the DataLoader
-# - Full-batch inference (no shuffling) ensures all predictions are made at once
-#
-#  Inference:
-# - The model runs on the processed data, producing softmax probabilities
-# - The output is saved to `preds_mi_two`, which we’ll use in the ensemble later
-# -----------------------------------------------------------------------------
-
-
-model_mi_2 = MTCFormer(depth=3,
-                    kernel_size=10,
-                    n_times=1200,
-                    chs_num=7,
-                    eeg_ch_nums=4,
-                    class_num=2,
-                    class_num_domain=30,
-                    modulator_dropout=0.3,
-                    mid_dropout=0.5,
-                    output_dropout=0.5,
-                    weight_init_mean=0,
-                    weight_init_std=0.5,
-                    ).to(device)
-
-
-
-optimizer = Adam(model_mi_2.parameters(), lr=0.002)
-
-checkpoint_path = os.path.join(
-    checkpoint_dicetory,
-    "checkpoints",
-    "model_2_mi_checkpoint",
-    "best_model_.pth"
-    )
-
-checkpoint = torch.load(checkpoint_path, weights_only=False)
-
-model_mi_2.load_state_dict(checkpoint['model_state_dict'] , strict=False)
-
-print("Preprocessing data for model 2...... ")
-cols_to_pick = [
-        'C3',
-        'C4',
-        'CZ',
-        'FZ',
-        'Acc_norm',
-        'gyro_norm',
-        'Validation'
-          ]
-
-params = {
-    "cols_to_pick":cols_to_pick,
-    "l_freq": 6,
-    "h_freq": 30,
-    "notch_freqs": [50, 100],
-    "notch_width": 1.0,
-    "window_size": 1200,
-    "window_stride": 35
-}
-
-test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
-    test_data_mi,
-    labels = test_labels_mi,
-    subject_labels = test_subject_labels,
-    preprocess_func=preprocess_one_file,
-    params = params,
-    n_jobs=4
-    )
-
-
-test_mi_torch = torch.from_numpy(test_data).to(torch.float32)
-weights_test_torch = torch.from_numpy(weights_test).to(torch.float32)
-test_labels_placeholder = torch.zeros(test_mi_torch.shape[0], dtype=torch.long)
-test_mi_torch_subject = torch.from_numpy(subject_label_test_).to(torch.long)
-
-
-test_dataset = EEGDataset(
-    data_tensor = test_mi_torch,
-    weigths = weights_test_torch,
-    label_tensor = test_labels_placeholder,
-    subject_labels = test_mi_torch_subject
-    )
-
-
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=len(test_dataset),
-    shuffle=False
-    ) 
-preds_mi_two = predict(
-    model_mi_2,
-    window_len=WINDOW_LEN,
-    loader=test_loader,
-    num_samples_to_predict=50,
-    device = device,
-    probability=True
-    )
-
-
 
 
 
 # -----------------------------------------------------------------------------
-#  Model 3 – Inference for MI using MTCFormer (depth=2, window=600)
+#  Model 2 – Inference for MI using MTCFormer (depth=2, window=600)
 #
-# This is the third and final model we'll use in our Motor Imagery (MI) ensemble.
+# This is the second and final model we'll use in our Motor Imagery (MI) ensemble.
 # Architecturally, it's similar to Model 1 — same depth and window size — but it
 # was trained under different training conditions,
-# which brings diversity to the ensemble and helps improve robustness.
+# which brings diversity to the ensemble and helps improve robustness. (does not use adversarial sample generation)
 #
 #  Model Architecture:
 # - depth = 2 → moderate depth, capturing key spatiotemporal EEG patterns
@@ -484,7 +356,7 @@ preds_mi_two = predict(
 # - The result is stored in `preds_mi_three` for use in the final rank-based ensemble
 # -----------------------------------------------------------------------------
 
-model_mi_three = MTCFormer(depth=2,
+model_mi_two = MTCFormer(depth=2,
                     kernel_size=5,
                     n_times=600,
                     chs_num=7,
@@ -500,18 +372,18 @@ model_mi_three = MTCFormer(depth=2,
 
 
 
-optimizer = Adam(model_mi_three.parameters(), lr=0.002)
+optimizer = Adam(model_mi_two.parameters(), lr=0.002)
 
 checkpoint_path = os.path.join(
     checkpoint_dicetory,
     "checkpoints",
-    "model_3_mi_checkpoint",
+    "model_2_mi_checkpoint",
     "best_model_.pth"
     )
 
 checkpoint = torch.load(checkpoint_path, weights_only=False)
 
-model_mi_three.load_state_dict(checkpoint['model_state_dict'] , strict=False)
+model_mi_two.load_state_dict(checkpoint['model_state_dict'] , strict=False)
 
 print("Preprocessing data for model 3...... ")
 cols_to_pick = [
@@ -563,8 +435,8 @@ test_loader = DataLoader(
     batch_size=len(test_dataset),
     shuffle=False
     ) 
-preds_mi_three = predict(
-    model_mi_three,
+preds_mi_two = predict(
+    model_mi_two,
     window_len=WINDOW_LEN,
     loader=test_loader,
     num_samples_to_predict=50,
@@ -611,9 +483,8 @@ from utils.rank_ensemble import RankAveragingEnsemble
 probs_list =  [
     preds_mi_one,
     preds_mi_two,
-    preds_mi_three
 ]
-weights = [  1  ,   0.5   ,   1  ]
+weights = [  1  , 1 ]
 
 final_mi_predictions = RankAveragingEnsemble(
     prob_list=probs_list,

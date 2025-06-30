@@ -20,9 +20,9 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 │    ├── test.csv
 │    └── sample_submission.csv 
 ├── train/
+|   |── checkpoints               #created during training
 │   ├── train_mi_model1.py        # Train MI model variant 1
 │   ├── train_mi_model2.py        # Train MI model variant 2 (adversarial)
-│   ├── train_mi_model3.py        # Train MI model variant 3
 │   └── train_ssvep_model.py      # Train SSVEP model
 ├── utils/
 │   ├── augmentation.py           # Data augmentation utilities
@@ -32,7 +32,7 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 │   ├── preprocessing.py          # Preprocessing functions
 │   ├── rank_ensemble.py          # Ensemble ranking utilities
 │   └── training.py               # Training and prediction utilities
-├── checkpoints/                  # Model checkpoints (created during training)
+├── checkpoints/                  # Model checkpoints (best checkpoints)
 ├── requirements.txt              # Python dependencies
 ├── reproducible_env.yml          # Conda reproducible environment file
 ├── submission.csv                # Example submission file
@@ -127,7 +127,7 @@ Under the hood, this script performs the following steps:
   Utilities in [`utils/preprocessing.py`](utils/preprocessing.py) and [`utils/augmentation.py`](utils/augmentation.py) handle signal cleaning and data augmentation.
 
 - **Model Training:**  
-  - MI models: [`train/train_mi_model1.py`](train/train_mi_model1.py), [`train/train_mi_model2.py`](train/train_mi_model2.py), [`train/train_mi_model3.py`](train/train_mi_model3.py)  
+  - MI models: [`train/train_mi_model1.py`](train/train_mi_model1.py), [`train/train_mi_model2.py`](train/train_mi_model2.py). 
   - SSVEP model: [`train/train_ssvep_model.py`](train/train_ssvep_model.py)  
   - All models use the `MTCFormer` architecture defined in [`model/MTCformerV3.py`](model/MTCformerV3.py). with a tutorial at [`model/README.md`](model/README.md).
 
@@ -188,7 +188,6 @@ Under the hood, this script performs the following steps:
    ```bash
    python train/train_mi_model1.py
    python train/train_mi_model2.py
-   python train/train_mi_model3.py
    python train/train_ssvep_model.py
    ```
 
@@ -199,7 +198,6 @@ Under the hood, this script performs the following steps:
    ```bash
    python train/train_mi_model1.py --test_pipeline
    python train/train_mi_model2.py --test_pipeline
-   python train/train_mi_model3.py --test_pipeline
    python train/train_ssvep_model.py --test_pipeline
    ```
 
