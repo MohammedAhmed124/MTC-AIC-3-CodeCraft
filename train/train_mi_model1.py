@@ -84,6 +84,48 @@ val_subject_labels = extract_subject_labels(val_data_mi)
 test_subject_labels = extract_subject_labels(test_data_mi)
 
 
+# -----------------------------------------------------------------------------
+# [Optional] Test Pipeline Mode: --test_pipeline
+#
+#    - When this flag is passed, the script enables a lightweight debug mode
+#      intended for fast testing and development.
+#
+#    - Instead of using the full dataset, it truncates the number of samples
+#      from each split train to only the **first 50 trials**.
+#
+#    - This affects:
+#        - Raw EEG data (`train_data_mi`, etc.)
+#        - Corresponding labels (`train_labels_mi_mapped`, etc.)
+#        - Subject ID labels (`train_subject_labels`, etc.)
+#
+#    - This mode is useful for verifying pipeline correctness quickly, without
+#      waiting for full data to load or process.
+#
+# -----------------------------------------------------------------------------
+
+
+
+import argparse
+# --- argparse block ---
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--test_pipeline",
+    action="store_true",
+    help="Run pipeline on small subset of data (50 samples)"
+    )
+args = parser.parse_args()
+TEST_MODE = args.test_pipeline
+
+
+
+
+if TEST_MODE:
+    print("[TEST PIPELINE ENABLED] Truncating to 50 samples per split.\n")
+    train_subject_labels = train_subject_labels[:50]
+    train_data_mi = train_data_mi[:50]
+    train_labels_mi_mapped = train_labels_mi_mapped[:50]
+
+
 
 # -----------------------------------------------------------------------------
 # 2. Preprocess EEG data: we apply sequential preprocessing steps to each recording here
@@ -217,7 +259,10 @@ from utils.augmentation import augment_data
 print("Data Preparation.... Wrapping preprocessed data inside tensor datasets....",end = "\n\n")
 
 
-batch_size=100
+if TEST_MODE:
+    batch_size=10
+else:
+    batch_size=100
 
 # Convert numpy arrays to PyTorch tensors with correct dtypes
 orig_labels_val_torch = torch.from_numpy(val_labels_mi_mapped).to(torch.long) # Original labels for validation aggregation

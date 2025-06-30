@@ -87,6 +87,47 @@ test_subject_labels = extract_subject_labels(test_data_ssvep)
 
 
 # -----------------------------------------------------------------------------
+# [Optional] Test Pipeline Mode: --test_pipeline
+#
+#    - When this flag is passed, the script enables a lightweight debug mode
+#      intended for fast testing and development.
+#
+#    - Instead of using the full dataset, it truncates the number of samples
+#      from each split train to only the **first 50 trials**.
+#
+#    - This affects:
+#        - Raw EEG data (`train_data_ssvep`, etc.)
+#        - Corresponding labels (`train_labels_ssvep_mapped`, etc.)
+#        - Subject ID labels (`train_subject_labels`, etc.)
+#
+#    - This mode is useful for verifying pipeline correctness quickly, without
+#      waiting for full data to load or process.
+#
+# -----------------------------------------------------------------------------
+
+
+import argparse
+# --- argparse block ---
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--test_pipeline",
+    action="store_true",
+    help="Run pipeline on small subset of data (50 samples)"
+    )
+args = parser.parse_args()
+TEST_MODE = args.test_pipeline
+
+
+
+
+if TEST_MODE:
+    print("[TEST PIPELINE ENABLED] Truncating to 50 samples per split.\n")
+    train_subject_labels = train_subject_labels[:50]
+    train_data_ssvep = train_data_ssvep[:50]
+    train_labels_ssvep_mapped = train_labels_ssvep_mapped[:50]
+
+
+# -----------------------------------------------------------------------------
 # 2. Preprocess SSVEP EEG data: apply a sequence of preprocessing operations
 #
 #    For each raw EEG trial (SSVEP task), we apply the following steps:
@@ -214,7 +255,13 @@ from utils.augmentation import augment_data
 
 print("Data Preparation.... Wrapping preprocessed data inside tensor datasets....",end = "\n\n")
 
-batch_size = 100
+if TEST_MODE:
+    batch_size=10
+else:
+    batch_size = 100
+
+
+    
 orig_labels_train_torch = torch.from_numpy(train_labels_ssvep_mapped).to(torch.long)
 orig_labels_val_torch = torch.from_numpy(val_labels_ssvep_mapped).to(torch.long)
 
