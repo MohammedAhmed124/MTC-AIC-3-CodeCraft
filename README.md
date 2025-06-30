@@ -103,12 +103,31 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 
 4. **Train models:**
 
-   ```sh
+   Option 1: Full Training  
+   Train on the entire dataset.  
+   ⚠️ *This may crash on systems with less than 16 GB of RAM.*
+
+   ```bash
    python train/train_mi_model1.py
    python train/train_mi_model2.py
    python train/train_mi_model3.py
    python train/train_ssvep_model.py
    ```
+
+   Option 2: Test the Training Pipeline  
+   Run a minimal version of the pipeline using only the first 50 samples.  
+   Useful for debugging or verifying that the pipeline runs correctly.
+
+   ```bash
+   python train/train_mi_model1.py --test_pipeline
+   python train/train_mi_model2.py --test_pipeline
+   python train/train_mi_model3.py --test_pipeline
+   python train/train_ssvep_model.py --test_pipeline
+   ```
+
+   > **Note:** This mode is not intended for meaningful training or performance evaluation. It is only for verifying that the pipeline executes correctly on a small subset of the data.
+
+
 
 5. **Run inference:**
 
@@ -121,6 +140,51 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
    ```
 
    The output will be saved as `submission.csv` (or `submission_regenerated_(non_best).csv` if using non-best checkpoints).
+
+
+## 5. **Computational Environment**
+
+This project was developed and tested under the following setup:
+
+- **Operating System:** Ubuntu 22.04 LTS  
+- **Python Version:** 3.10.8  
+- **Environment Manager:** Conda  
+- **System RAM:** 32 GB  
+- **GPU:** NVIDIA RTX 4070 (12 GB VRAM)  
+- **CUDA Version:** 12.6  
+- **cuDNN Version:** 9.5.1  
+
+---
+
+###  Key Libraries
+
+####  Core Scientific Stack
+- `numpy==1.26.4`  
+- `pandas==2.3.0`  
+- `scipy==1.15.2`  
+- `scikit-learn==1.2.2`  
+- `joblib`  
+- `tqdm`  
+- `glob2`  
+- `ipython==8.37.0`  
+
+####  PyTorch Stack
+- `torch==2.7.1`  
+- `torchvision==0.22.1`  
+- `torchaudio==2.7.1`  
+- `torchinfo==1.8.0`  
+- `torchview==0.2.7`  
+- `torchvis==0.2.0`  
+- `torchviz==0.0.3`  
+
+####  EEG / MNE Tools
+- `mne==1.9.0`  
+- `mne-features==0.3`  
+
+---
+
+To replicate this environment, use the provided `environment.yml` or `requirements.txt`
+
 
 ## Notes
 
