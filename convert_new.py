@@ -32,7 +32,7 @@ class EEGProcessor:
     MIN_VALIDATION_THRESHOLD = 0.72
     MAX_GYRO_THRESHOLD = 6.0
 
-    def __inti__(
+    def __init__(
         self, competitions_data_directory: str, output_directory: str = "data_fif"
     ):
         """
