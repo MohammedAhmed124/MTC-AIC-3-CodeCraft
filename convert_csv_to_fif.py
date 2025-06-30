@@ -1,222 +1,394 @@
-import os
+from utils.extractors import extract_trial
+from typing import Dict, Tuple, Any
+from pathlib import Path
 from tqdm import tqdm
-import mne
 import pandas as pd
 import numpy as np
-from utils.extractors import extract_trial
 import argparse
+import logging
 import shutil
-
-parser = argparse.ArgumentParser()
-
-SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
-defualt_data_path = os.path.join(SCRIPT_PATH,"data")
-parser.add_argument(
-    "--competitions_data_directory",
-    type=str,
-    default=defualt_data_path,
-    help="Path to the directory containing the competition data"
-)
-args = parser.parse_args()
-
-competitions_data_directory = args.competitions_data_directory
-
-
-# ------------------------------------------------------------------------------
-# Utility: remove all subdirectories from a given path (used to reset output dir)
-# ------------------------------------------------------------------------------
-
-os.makedirs("data_fif", exist_ok=True)
-
-def remove_all_subdirectories(path):
-    for name in os.listdir(path):
-        full_path = os.path.join(path, name)
-        if os.path.isdir(full_path):
-            shutil.rmtree(full_path)
-
-remove_all_subdirectories("data_fif")
+import mne
 
 
 
-
-# ------------------------------------------------------------------------------
-# Read label CSVs which contain metadata for each EEG trial
-# ------------------------------------------------------------------------------
-
-train_csv_path = os.path.join(competitions_data_directory,"train.csv")
-val_csv_path = os.path.join(competitions_data_directory,"validation.csv")
-test_csv_path = os.path.join(competitions_data_directory,"test.csv")
-
-train_labels = pd.read_csv(train_csv_path)
-validation_labels = pd.read_csv(val_csv_path)
-test_labels = pd.read_csv(test_csv_path)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-
-# ------------------------------------------------------------------------------
-# Main function: save each EEG trial as a clean .fif file
-# ------------------------------------------------------------------------------
-def save_data_as_fif(df,base_path="data_fif/", data_type="train"):
-
+class EEGProcessor:
     """
-    Processes EEG trials from a competition dataset and saves them as clean .fif files 
-    (used by MNE) with relevant metadata and quality annotations.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        A DataFrame containing trial metadata. Each row describes one EEG trial and 
-        includes the following fields:
-        - id : Unique trial ID
-        - subject_id : Identifier of the subject who performed the trial
-        - task : Either "MI" (Motor Imagery) or "SSVEP" (Steady-State Visual Evoked Potential)
-        - trial_session : Session index in which the trial was recorded
-        - trial : Trial index within the session
-        - label : (train/val only) Ground truth label for the trial
-
-    base_path : str, optional
-        Directory where the `.fif` files will be saved. It will create a subfolder per 
-        task and data split (e.g., `data_fif/train/MI/...`).
-
-    data_type : str, optional
-        One of "train", "validation", or "test". Used to:
-        - Skip low-quality trials during training and validation.
-        - Avoid assigning labels for test data.
-        - Determine the file path structure.
-
-    Workflow Summary
-    ----------------
-    - For each trial:
-        1. Loads the associated full EEG session CSV.
-        2. Computes auxiliary features:
-           - Acc_norm: L2 norm of [AccX, AccY, AccZ]
-           - gyro_norm: L2 norm of [Gyro1, Gyro2, Gyro3]
-        3. Extracts the trial-specific segment using `extract_trial()`.
-        4. Constructs an MNE `Raw` object with channel names and types.
-        5. Stores relevant metadata:
-           - Trial ID, quality metrics, and (optionally) the label
-        6. Annotates bad signal segments where Validation == 0.
-        7. Skips trials with poor quality (low `Validation` or high `gyro_norm`) in train/val.
-        8. Saves the result as a `.fif` file to disk.
-
-    Notes
-    -----
-    - This function uses caching to avoid re-loading the same CSV for trials from the 
-      same session.
-    - Annotations are useful for downstream denoising during later model training.
-    - The final `.fif` files are MNE-compatible and contain these final selected channels: ['FZ', 'C3', 'CZ', 'C4', 'PZ', 'PO7', 'OZ', 'PO8', 'Acc_norm','gyro_norm','Validation'].
-
-    Raises
-    ------
-    FileNotFoundError
-        If the EEG data CSV for a trial is missing.
-
-    ValueError
-        If trial metadata is incomplete or malformed.
+    A class to process EEG competition data and convert it to MNE-compatible .fif files.
     """
-    mne.set_log_level("ERROR")
-    path_mi= os.path.join(base_path,data_type,"MI")
-    path_ssvep = os.path.join(base_path,data_type,"SSVEP")
-    os.makedirs(path_mi, exist_ok=True)
-    os.makedirs(path_ssvep, exist_ok=True)
-    cache = [(0,0)]
-    for row_id in tqdm(range(df.shape[0]) , total = len(df)):
-        row = df.loc[row_id]
-        id_ = row.id
-        subject_id = row.subject_id
-        task = row.task
-        trial_session = row.trial_session
-        trial =row.trial
-        label = row.label if not data_type=="test" else None
-        file_path = os.path.join(
-            competitions_data_directory,
-            task,
-            data_type,
-            subject_id,
-            str(trial_session),
-            "EEGdata.csv"
+
+    # Constants
+    SAMPLING_FREQ = 250
+    EEG_CHANNELS = ["FZ", "C3", "CZ", "C4", "PZ", "PO7", "OZ", "PO8"]
+    ACCELEROMETER_CHANNELS = ["AccX", "AccY", "AccZ"]
+    GYROSCOPE_CHANNELS = ["Gyro1", "Gyro2", "Gyro3"]
+    COLUMNS_TO_DROP = ["Time", "Counter", "Battery"]
+
+    # Quality thresholds
+    MIN_VALIDATION_THRESHOLD = 0.72
+    MAX_GYRO_THRESHOLD = 6.0
+
+    def __init__(
+        self, competitions_data_directory: str, output_directory: str = "data_fif"
+    ):
+        """
+        Initialize the EEG processor.
+
+        Parameters
+        ----------
+        competitions_data_directory : str
+            Path to the directory containing competition data
+        output_directory : str
+            Path to the output directory for .fif files
+        """
+        self.competitions_data_directory = Path(competitions_data_directory)
+        self.output_directory = Path(output_directory)
+        self.csv_cache: Dict[str, pd.DataFrame] = {}
+
+        # Set MNE log level to reduce verbosity
+        mne.set_log_level("ERROR")
+
+        # Create output directory
+        self.output_directory.mkdir(exist_ok=True)
+
+        self._reset_output_directory()
+
+    def _reset_output_directory(self) -> None:
+        """Remove all subdirectories from the output directory."""
+        for item in self.output_directory.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+
+    def _load_csv_labels(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Load train, validation, and test CSV files."""
+        try:
+            train_labels = pd.read_csv(self.competitions_data_directory / "train.csv")
+            validation_labels = pd.read_csv(
+                self.competitions_data_directory / "validation.csv"
             )
-        
-        if file_path == cache[0][1]:
-            csv_file = cache[0][0]
-        else:
-            csv_file = pd.read_csv(file_path).drop(["Time" , "Counter" ,"Battery"], axis = 1)
-            csv_file["Acc_norm"] = np.linalg.norm(csv_file[['AccX','AccY', 'AccZ']],axis =1 )
-            csv_file["gyro_norm"] = np.linalg.norm(csv_file[['Gyro1','Gyro2', 'Gyro3']],axis =1 )
-            csv_file = csv_file.drop(columns= ['AccX','AccY', 'AccZ', 'Gyro1', 'Gyro2', 'Gyro3'])
-            csv_file = csv_file[['FZ', 'C3', 'CZ', 'C4', 'PZ', 'PO7', 'OZ', 'PO8', 'Acc_norm','gyro_norm','Validation']]
-            cache[0] = (csv_file , file_path)
-        
-        ch_names = ['FZ', 'C3', 'CZ', 'C4', 'PZ', 'PO7', 'OZ', 'PO8', 'Acc_norm','gyro_norm','Validation']
-        ch_types = ["eeg"]*8 + ['misc'] * 2+ ['stim']
+            test_labels = pd.read_csv(self.competitions_data_directory / "test.csv")
+            return train_labels, validation_labels, test_labels
+        except FileNotFoundError as e:
+            logger.error(f"CSV file not found: {e}")
+            raise
 
+    def _preprocess_csv_data(self, csv_file: pd.DataFrame) -> pd.DataFrame:
+        """
+        Preprocess CSV data by computing norms and selecting relevant columns.
 
-        raw_data = extract_trial((trial-1), csv_file, task =task )
+        Parameters
+        ----------
+        csv_file : pd.DataFrame
+            Raw CSV data
 
-        info = mne.create_info(ch_names=ch_names, sfreq=250, ch_types=ch_types)
-        raw = mne.io.RawArray(raw_data.to_numpy().T, info)
+        Returns
+        -------
+        pd.DataFrame
+            Preprocessed CSV data
+        """
 
+        csv_file = csv_file.drop(self.COLUMNS_TO_DROP, errors="ignore")
 
-        val_mean = float(raw_data["Validation"].mean())
-        acc_mean = float(raw_data["Acc_norm"].mean())
-        gyro_mean = float(raw_data["gyro_norm"].mean())
+        csv_file["Acc_norm"] = np.linalg.norm(
+            csv_file[self.ACCELEROMETER_CHANNELS], axis=1
+        )
+        csv_file["gyro_norm"] = np.linalg.norm(
+            csv_file[self.GYROSCOPE_CHANNELS], axis=1
+        )
 
+        csv_file = csv_file.drop(
+            columns=self.ACCELEROMETER_CHANNELS + self.GYROSCOPE_CHANNELS,
+            errors="ignore",
+        )
 
-        if (val_mean<=0.72 or gyro_mean>6) and data_type in ["train","validation"]:
-            continue #skip this trial 
+        final_columns = self.EEG_CHANNELS + ["Acc_norm", "gyro_norm", "Validation"]
+        return csv_file[final_columns]
 
+    def _load_and_cache_csv(self, file_path: Path) -> pd.DataFrame:
+        """
+        Load CSV file with caching to avoid repeated file I/O.
 
-        raw.info['subject_info'] = {
-            'id': int(id_),                     
-            'his_id': str((val_mean,acc_mean , gyro_mean)),          
+        Parameters
+        ----------
+        file_path : Path
+            Path to the CSV file
 
-            'sex': 0,                         
-            'birthday': None,           
+        Returns
+        -------
+        pd.DataFrame
+            Preprocessed CSV data
+        """
+        file_path_str = str(file_path)
+
+        if file_path_str not in self.csv_cache:
+            try:
+                csv_file = pd.read_csv(file_path)
+                csv_file = self._preprocess_csv_data(csv_file)
+                self.csv_cache[file_path_str] = csv_file
+                logger.debug(f"Loaded and cached: {file_path}")
+            except FileNotFoundError:
+                logger.error(f"EEG data file not found: {file_path}")
+                raise
+
+        return self.csv_cache[file_path_str]
+
+    def _create_mne_raw(
+        self, trial_data: pd.DataFrame, trial_info: Dict[str, Any]
+    ) -> mne.io.RawArray:
+        """
+        Create MNE Raw object from trial data.
+
+        Parameters
+        ----------
+        trial_data : pd.DataFrame
+            Trial-specific EEG data
+        trial_info : Dict[str, Any]
+            Trial metadata
+
+        Returns
+        -------
+        mne.io.RawArray
+            MNE Raw object
+        """
+        ch_names = list(trial_data.columns)
+        ch_types = ["eeg"] * len(self.EEG_CHANNELS) + ["misc"] * 2 + ["stim"]
+
+        info = mne.create_info(
+            ch_names=ch_names, sfreq=self.SAMPLING_FREQ, ch_types=ch_types
+        )
+
+        raw = mne.io.RawArray(trial_data.to_numpy().T, info)
+
+        raw.info["subject_info"] = {
+            "id": int(trial_info["id"]),
+            "his_id": str(
+                (
+                    trial_info["val_mean"],
+                    trial_info["acc_mean"],
+                    trial_info["gyro_mean"],
+                )
+            ),
+            "sex": 0,
+            "birthday": None,
         }
-        raw.info['description'] = label
 
-        flag_data = raw.copy().pick_channels(["Validation"]).get_data()[0]
+        # Add label as description (if available)
+        if trial_info.get("label") is not None:
+            raw.info["description"] = trial_info["label"]
 
-        flag_data = raw.copy().pick_channels(["Validation"]).get_data()[0]
-        sfreq = 250
+        return raw
 
-        # Invert if 1 means good and 0 means bad, because annotations mark bad segments
-        bad_mask = (flag_data == 0)
+    def _add_bad_annotations(self, raw: mne.io.RawArray) -> None:
+        """
+        Add annotations for bad segments based on validation flags.
 
-        # Find transitions in the mask (diff non-zero means start or end of a bad segment)
+        Parameters
+        ----------
+        raw : mne.io.RawArray
+            MNE Raw object to annotate
+        """
+        validation_data = raw.copy().pick_channels(["Validation"]).get_data()[0]
+
+        # Find bad segments (where validation == 0)
+        bad_mask = validation_data == 0
         changes = np.diff(bad_mask.astype(int))
+
         starts = np.where(changes == 1)[0] + 1
         ends = np.where(changes == -1)[0] + 1
 
-        # Handle edge cases (start or end of data is bad)
+        # Handle edge cases
         if bad_mask[0]:
             starts = np.insert(starts, 0, 0)
         if bad_mask[-1]:
             ends = np.append(ends, len(bad_mask))
 
-        onsets = starts / sfreq
-        durations = (ends - starts) / sfreq
+        if len(starts) > 0:
+            onsets = starts / self.SAMPLING_FREQ
+            durations = (ends - starts) / self.SAMPLING_FREQ
+            annotations = mne.Annotations(
+                onset=onsets, duration=durations, description=["BAD"] * len(onsets)
+            )
+            raw.set_annotations(annotations)
 
-        annotations = mne.Annotations(onset=onsets, duration=durations, description=['BAD']*len(onsets))
-        raw.set_annotations(annotations)
+    def _should_skip_trial(
+        self, val_mean: float, gyro_mean: float, data_type: str
+    ) -> bool:
+        """
+        Determine if a trial should be skipped based on quality metrics.
 
-        # raw.drop_channels(['Validation'])
-        save_path = os.path.join(path_mi if task=="MI" else path_ssvep,f"{task}_{subject_id}_{trial_session}_{trial}_.fif")
+        Parameters
+        ----------
+        val_mean : float
+            Mean validation score
+        gyro_mean : float
+            Mean gyroscope norm
+        data_type : str
+            Type of data (train, validation, test)
 
-        raw.save(save_path, overwrite=True)
-    mne.set_log_level("INFO")
-                
+        Returns
+        -------
+        bool
+            True if trial should be skipped
+        """
+        if data_type in ["train", "validation"]:
+            return (
+                val_mean <= self.MIN_VALIDATION_THRESHOLD
+                or gyro_mean > self.MAX_GYRO_THRESHOLD
+            )
+        return False
 
-base_path = os.path.join(SCRIPT_PATH,"data_fif")
-save_data_as_fif(train_labels.sort_values(by=["task","trial_session"])
-                 ,base_path=base_path
-                 , data_type="train")
+    def save_data_as_fif(self, df: pd.DataFrame, data_type: str) -> None:
+        """
+        Process EEG trials and save them as .fif files.
 
-save_data_as_fif(validation_labels.sort_values(by=["task","trial_session"])
-                 ,base_path=base_path
-                 , data_type="validation")
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame containing trial metadata
+        data_type : str
+            One of "train", "validation", or "test"
+        """
+        # Create output directories
+        path_mi = self.output_directory / data_type / "MI"
+        path_ssvep = self.output_directory / data_type / "SSVEP"
+        path_mi.mkdir(parents=True, exist_ok=True)
+        path_ssvep.mkdir(parents=True, exist_ok=True)
+
+        skipped_trials = 0
+        processed_trials = 0
+
+        for _, row in tqdm(
+            df.iterrows(), total=len(df), desc=f"Processing {data_type}"
+        ):
+            try:
+                # Extract trial information
+                trial_info = {
+                    "id": row.id,
+                    "subject_id": row.subject_id,
+                    "task": row.task,
+                    "trial_session": row.trial_session,
+                    "trial": row.trial,
+                    "label": row.label if data_type != "test" else None,
+                }
+
+                # Construct file path
+                file_path = (
+                    self.competitions_data_directory
+                    / trial_info["task"]
+                    / data_type
+                    / trial_info["subject_id"]
+                    / str(trial_info["trial_session"])
+                    / "EEGdata.csv"
+                )
+
+                # Load and process CSV data
+                csv_file = self._load_and_cache_csv(file_path)
+
+                # Extract trial data
+                raw_data = extract_trial(
+                    trial_info["trial"] - 1, csv_file, task=trial_info["task"]
+                )
+
+                # Calculate quality metrics
+                val_mean = float(raw_data["Validation"].mean())
+                acc_mean = float(raw_data["Acc_norm"].mean())
+                gyro_mean = float(raw_data["gyro_norm"].mean())
+
+                # Skip low-quality trials for train/validation
+                if self._should_skip_trial(val_mean, gyro_mean, data_type):
+                    skipped_trials += 1
+                    continue
+
+                # Add quality metrics to trial info
+                trial_info.update(
+                    {"val_mean": val_mean, "acc_mean": acc_mean, "gyro_mean": gyro_mean}
+                )
+
+                # Create MNE Raw object
+                raw = self._create_mne_raw(raw_data, trial_info)
+
+                # Add bad segment annotations
+                self._add_bad_annotations(raw)
+
+                # Save as .fif file
+                output_path = path_mi if trial_info["task"] == "MI" else path_ssvep
+                filename = (
+                    f"{trial_info['task']}_{trial_info['subject_id']}_"
+                    f"{trial_info['trial_session']}_{trial_info['trial']}.fif"
+                )
+                save_path = output_path / filename
+
+                raw.save(save_path, overwrite=True)
+                processed_trials += 1
+
+            except Exception as e:
+                logger.error(f"Error processing trial {row.id}: {e}")
+                continue
+
+        logger.info(
+            f"{data_type}: Processed {processed_trials} trials, skipped {skipped_trials} trials"
+        )
+
+    def process_all_data(self) -> None:
+        """Process all train, validation, and test data."""
+        try:
+            # Load CSV labels
+            train_labels, validation_labels, test_labels = self._load_csv_labels()
+
+            # Sort by task and trial_session for better caching efficiency
+            sort_columns = ["task", "trial_session"]
+
+            # Process each dataset
+            self.save_data_as_fif(train_labels.sort_values(by=sort_columns), "train")
+            self.save_data_as_fif(
+                validation_labels.sort_values(by=sort_columns), "validation"
+            )
+            self.save_data_as_fif(test_labels.sort_values(by=sort_columns), "test")
+
+            logger.info("All data processing completed successfully!")
+
+        finally:
+            # Reset MNE log level
+            mne.set_log_level("INFO")
 
 
-save_data_as_fif(test_labels.sort_values(by=["task","trial_session"])
-                 ,base_path=base_path
-                 , data_type="test")
+def main():
+    """Main function to run the EEG processor."""
+    parser = argparse.ArgumentParser(
+        description="Process EEG competition data to .fif files"
+    )
+
+    script_path = Path(__file__).parent
+    default_data_path = script_path / "data"
+
+    parser.add_argument(
+        "--competitions_data_directory",
+        type=str,
+        default=str(default_data_path),
+        help="Path to the directory containing the competition data",
+    )
+
+    parser.add_argument(
+        "--output_directory",
+        type=str,
+        default="data_fif",
+        help="Path to the output directory for .fif files",
+    )
+
+    args = parser.parse_args()
+
+    # Create and run processor
+    processor = EEGProcessor(
+        competitions_data_directory=args.competitions_data_directory,
+        output_directory=args.output_directory,
+    )
+
+    processor.process_all_data()
+
+
+if __name__ == "__main__":
+    main()

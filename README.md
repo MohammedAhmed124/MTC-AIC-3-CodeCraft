@@ -39,22 +39,23 @@ This repository contains a complete pipeline for the MTC-AIC EEG competition, in
 └── README.md                     # Project documentation
 ```
 
-## Main Components
+##  Main Components
 
-- **Data Conversion:**
-Easily convert your raw competition CSV files to the efficient `.fif` format for MNE processing using the `convert_csv_to_fif.py` script.
-**Tip:** If your competition data is already in a folder named `data`, simply run the script without arguments—it will automatically use that directory.
-  
-- **Preprocessing & Augmentation:**
-  Utilities in `utils/preprocessing.py` and `utils/augmentation.py` handle signal cleaning and data augmentation.
+- **Data Conversion:**  
+  Easily convert your raw competition CSV files to the efficient `.fif` format for MNE processing using the [`convert_csv_to_fif.py`](convert_csv_to_fif.py) script. for compatibility with our pipeline.
+  **Tip:** If your competition data is already in a folder named `data`, simply run the script without arguments—it will automatically use that directory.
 
-- **Model Training:**
-  - MI models: `train/train_mi_model1.py`, `train/train_mi_model2.py`, `train/train_mi_model3.py`
-  - SSVEP model: `train/train_ssvep_model.py`
-  - All models use the `MTCFormer` architecture (`model/MTCformerV3.py`).
+- **Preprocessing & Augmentation:**  
+  Utilities in [`utils/preprocessing.py`](utils/preprocessing.py) and [`utils/augmentation.py`](utils/augmentation.py) handle signal cleaning and data augmentation.
 
-- **Inference:**
-  The full inference pipeline is in `inference/inference.py`, producing a submission file.
+- **Model Training:**  
+  - MI models: [`train/train_mi_model1.py`](train/train_mi_model1.py), [`train/train_mi_model2.py`](train/train_mi_model2.py), [`train/train_mi_model3.py`](train/train_mi_model3.py)  
+  - SSVEP model: [`train/train_ssvep_model.py`](train/train_ssvep_model.py)  
+  - All models use the `MTCFormer` architecture defined in [`model/MTCformerV3.py`](model/MTCformerV3.py). with a tutorial at [`model/README.md`](model/README.md).
+
+- **Inference:**  
+  The full inference pipeline is in [`inference/inference.py`](inference/inference.py), producing the final submission file.
+
 
 ## Getting Started
 
@@ -123,12 +124,15 @@ Easily convert your raw competition CSV files to the efficient `.fif` format for
 
 ## Notes
 
-- Model best checkpoints are saved in the `checkpoints` directory (the one at the top level directory) .
-- Custom datasets and data loaders are implemented in `utils/CustomDataset.py`.
-- Training and evaluation utilities are in `utils/training.py`.
-- **Model architecture details and diagram are available in [`model/README.md`](model/README.md).**
-
-
+- Model best checkpoints are saved in the [`checkpoints`](checkpoints) directory `(the one at the top level directory)` .
+- Custom datasets and data loaders are implemented in [`utils/CustomDataset.py`](utils/CustomDataset.py).
+- Training and evaluation utilities are in [`utils/training.py`](utils/training.py).  
+- **Model architecture details, tutorial and diagram are available in [`model/README.md`](model/README.md).**
+- **preprocessing utilities available in [`utils/preprocessing.py`](utils/preprocessing.py)**
+- **augmentation logic available in [`utils/augmentation.py`](utils/augmentation.py)**
+- **adversarial gradient attack logic in [`utils/gradient_attack.py`](utils/gradient_attack.py)**
+- **Rank Averaging for Ensembling logic in [`utils/rank_ensemble.py`](utils/rank_ensemble.py)**
+- **All the theory behind the solution in [`system_description.pdf`](system_description.pdf)**
 ## Citation
 
 If you use this codebase, please cite the original competition and the MTCFormer model.

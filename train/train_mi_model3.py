@@ -45,7 +45,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 # -----------------------------------------------------------------------------
-# 1. Extract MI task EEG data and labels from MNE .fif files
+# 1. We Extract MI task EEG data and labels from MNE .fif files
 # 
 #    - Set paths to training, validation, and test .fif files under data_fif/
 #    - Read each .fif file using MNE and extract raw EEG data and labels
@@ -207,7 +207,7 @@ test_data,weights_test, _ ,subject_label_test_, WINDOW_LEN= preprocess_data(
 #       - Optional online data augmentation (enabled for training only).
 #
 #    4. **DataLoaders**:
-#       - Train loader uses batching and shuffling for SGD training.
+#       - Train loader uses batching and shuffling for training.
 #       - Val and Test loaders load the full set in one batch for deterministic evaluation.
 #
 #    5. **Device Setup**:
@@ -222,7 +222,7 @@ from utils.augmentation import augment_data
 print("Data Preparation.... Wrapping preprocessed data inside tensor datasets....",end = "\n\n")
 
 
-batch_size=500
+batch_size=125
 
 # Convert numpy arrays to PyTorch tensors with correct dtypes
 orig_labels_val_torch = torch.from_numpy(val_labels_mi_mapped).to(torch.long) # Original labels for validation aggregation
