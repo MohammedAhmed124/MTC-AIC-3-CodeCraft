@@ -48,7 +48,6 @@ from torch.utils.data import DataLoader
 # Alright, let’s get into it!
 # -----------------------------------------------------------------------------
 
-
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 ROOT_PATH = os.path.abspath(os.path.join(SCRIPT_PATH,".."))
 DATA_FIF_DIR = os.path.join(ROOT_PATH,"data_fif")
@@ -449,7 +448,7 @@ preds_mi_two = predict(
 # -----------------------------------------------------------------------------
 #  Final Step – Rank Averaging Ensemble for MI Predictions
 #
-# Now that we’ve obtained predictions from all three MTCFormer models,
+# Now that we’ve obtained predictions from all two MTCFormer models,
 # it’s time to combine them into a single, robust prediction using
 # **Rank Averaging**, a powerful ensemble strategy.
 #

@@ -406,7 +406,7 @@ train_model(model_former,
         n_classes=2
         )
 
-#Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_3_mi_checkpoint/best_model_.pth
+#Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_2_mi_checkpoint/best_model_.pth
 # -----------------------------------------------------------------------------
 # 🙏 Thanks for reading!
 #
