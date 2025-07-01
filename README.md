@@ -81,47 +81,6 @@ Under the hood, this script performs the following steps:
            ├── MI/
            └── SSVEP/
      ```
-### 🔄 **Data Conversion**
-
-Easily convert your raw competition CSV files to the efficient `.fif` format for MNE processing using the [`convert_csv_to_fif.py`](convert_csv_to_fif.py) script. This conversion ensures compatibility with the rest of the EEG processing pipeline.
-
-Under the hood, this script performs the following steps:
-
-1. **Load Labels & Trial Metadata**  
-   Loads metadata from `train.csv`, `validation.csv`, and `test.csv` to determine where each trial is stored and how to label it.
-
-2. **Preprocess Each Trial**  
-   For each trial:
-   - Reads the raw EEG `.csv` files.
-   - Drops irrelevant columns (`Time`, `Battery`, etc.).
-   - Computes L2 norms of accelerometer and gyroscope signals.
-   - Retains EEG + norm features + `Validation` signal.
-   
-3. **Quality Filtering**  
-   For training and validation data:
-   - Skips trials with poor quality (low validation scores or excessive movement).
-   - Keeps all test data (no skipping).
-
-4. **Trial Extraction**  
-   Extracts individual trial segments from the full session using the provided `extract_trial()` function.
-
-5. **Convert to MNE `.fif` Format**  
-   Converts each trial to an `mne.io.RawArray` object with:
-   - Proper EEG + misc channel labeling.
-   - Embedded metadata (subject ID, validation quality, etc.).
-   - Annotations marking bad segments (where `Validation == 0`).
-
-6. **Save Output**
-   - Saves each processed trial as a `.fif` file under:
-     ```
-     data_fif/
-       ├── train/
-       ├── validation/
-       └── test/
-           ├── MI/
-           └── SSVEP/
-     ```
-
 
 - **Preprocessing & Augmentation:**  
   Utilities in [`utils/preprocessing.py`](utils/preprocessing.py) and [`utils/augmentation.py`](utils/augmentation.py) handle signal cleaning and data augmentation.
