@@ -60,11 +60,20 @@ class EEGDataset(torch.utils.data.Dataset):
         self.augment = augment
         self.augmentation_func = augmentation_func
         self.seed = seed
+        self.batch_counter=0
     def __len__(self):
         """
         Returns the number of samples in the dataset.
         """
         return self.data.shape[0]
+    
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+    
+    def _increment_batch_counter(self):
+        self.batch_counter+=1
+    def _reset_batch_counter(self):
+        self.batch_counter=0
 
     def __getitem__(self, idx):
         """
@@ -89,6 +98,7 @@ class EEGDataset(torch.utils.data.Dataset):
         if self.augment:
             if not callable(self.augmentation_func):
                 raise TypeError("Parameter 'augmentation_func' must be a callable when 'augment' is True.")
-            data = self.augmentation_func(data,seed=self.seed , idx = idx)
+            data = self.augmentation_func(data,seed=self.seed , idx = self.batch_counter)
+            self._increment_batch_counter()
 
         return data, weight, label, subject_label

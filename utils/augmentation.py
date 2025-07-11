@@ -72,7 +72,7 @@ def augment_data(x , idx = None , seed = None):
         local_seed = seed + idx
         g = torch.Generator()
         g.manual_seed(local_seed)
-
+    
     # Generate a random number from uniform[0,1] and apply noise with 40% chance
     if torch.rand((1,) , generator=g).item() < 0.4:
         x = AddGaussianNoise(std=0.1)(x,generator=g)

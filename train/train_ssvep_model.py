@@ -386,24 +386,26 @@ scheduler = MultiStepLR(optimizer, milestones=[250], gamma=0.1)
 
 
 save_path = os.path.join(SCRIPT_PATH,"checkpoints","model_ssvep_checkpoint")
-train_model(model_former,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            criterion=criterion,
-            optimizer=optimizer,
-            window_len=WINDOW_LEN,
-            original_val_labels=orig_labels_val_torch,
-            n_epochs=220,
-            patience=50,
-            scheduler=scheduler,
-            save_path=save_path,
-            domain_lambda=0.0,
-            lambda_scheduler_fn=None,
-            adversarial_training=False,
-            n_classes=4,
-            device=device,
-            save_best_only=True
-    )
+train_model(
+    model_former,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    criterion=criterion,
+    optimizer=optimizer,
+    window_len=WINDOW_LEN,
+    original_val_labels=orig_labels_val_torch,
+    n_epochs=220,
+    patience=50,
+    scheduler=scheduler,
+    save_path=save_path,
+    domain_lambda=0.0,
+    lambda_scheduler_fn=None,
+    adversarial_training=False,
+    n_classes=4,
+    device=device,
+    save_best_only=True,
+    seed = SEED
+)
 
 
 #Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_ssvep_checkpoint/best_model_.pth

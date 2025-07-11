@@ -157,6 +157,7 @@ Under the hood, this script performs the following steps:
    ```bash
    python train/train_mi_model1.py --test_pipeline
    python train/train_mi_model2.py --test_pipeline
+
    python train/train_ssvep_model.py --test_pipeline
    ```
 

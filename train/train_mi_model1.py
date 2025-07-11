@@ -374,30 +374,32 @@ model_former_curr = MTCFormer(depth=2,
 
 optimizer = Adam(model_former_curr.parameters(), lr=0.002)
 criterion = CrossEntropyLoss(reduction="none")
-scheduler = MultiStepLR(optimizer, milestones=[50], gamma=0.1)
+scheduler = MultiStepLR(optimizer, milestones=[45], gamma=0.1)
 
 save_path=os.path.join(SCRIPT_PATH,"checkpoints","model_1_mi_checkpoint")
-train_model(model_former_curr,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        criterion=criterion,
-        optimizer=optimizer,
-        window_len=WINDOW_LEN,
-        original_val_labels=orig_labels_val_torch,
-        n_epochs=250,
-        patience=100,
-        scheduler=scheduler,
-        domain_lambda=0.01,
-        lambda_scheduler_fn=None,
-        adversarial_steps =1,
-        adversarial_epsilon=0.05,
-        adversarial_alpha = 0.005,
-        adversarial_training=True,
-        save_best_only=True,
-        save_path = save_path,
-        n_classes=2,
-        device = device
-    )
+train_model(
+    model_former_curr,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    criterion=criterion,
+    optimizer=optimizer,
+    window_len=WINDOW_LEN,
+    original_val_labels=orig_labels_val_torch,
+    n_epochs=250,
+    patience=100,
+    scheduler=scheduler,
+    domain_lambda=0.01,
+    lambda_scheduler_fn=None,
+    adversarial_steps =1,
+    adversarial_epsilon=0.05,
+    adversarial_alpha = 0.005,
+    adversarial_training=True,
+    save_best_only=True,
+    save_path = save_path,
+    n_classes=2,
+    device = device,
+    seed = SEED
+)
 
 
 

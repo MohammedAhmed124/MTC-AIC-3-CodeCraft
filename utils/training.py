@@ -6,31 +6,34 @@ import os
 from sklearn.metrics import f1_score , balanced_accuracy_score
 from .gradient_attack import GradientAttack #Function for gradient attack
 from .rank_ensemble import RankAveragingEnsemble
+from torch.utils.data import DataLoader
 import numpy as np
 
-def train_model(model,
-                train_loader=None,
-                val_loader=None,
-                criterion=None,
-                optimizer=None,
-                window_len=None,
-                original_val_labels=None,
-                n_epochs=500,
-                patience=200,
-                device="cuda",
-                save_model_checkpoints=True,
-                save_path = "DeepConvNetMI",
-                scheduler=None,
-                domain_lambda=0.1,
-                lambda_scheduler_fn=None,
-                adversarial_training=True,
-                adversarial_steps =10,
-                adversarial_epsilon=0.1,
-                adversarial_alpha = 0.01,
-                adversarial_factor=0.5,
-                n_classes=None,
-                save_best_only=False,
-                ):
+def train_model(
+    model,
+    train_loader=None,
+    val_loader=None,
+    criterion=None,
+    optimizer=None,
+    window_len=None,
+    original_val_labels=None,
+    n_epochs=500,
+    patience=200,
+    device="cuda",
+    save_model_checkpoints=True,
+    save_path = "DeepConvNetMI",
+    scheduler=None,
+    domain_lambda=0.1,
+    lambda_scheduler_fn=None,
+    adversarial_training=True,
+    adversarial_steps =10,
+    adversarial_epsilon=0.1,
+    adversarial_alpha = 0.01,
+    adversarial_factor=0.5,
+    n_classes=None,
+    save_best_only=False,
+    seed =None
+    ):
     
     """
     The function Trains a neural network model with optional Domain-Adversarial training and adversarial robustness.
@@ -153,6 +156,17 @@ def train_model(model,
         if lambda_scheduler_fn:
                 domain_lambda_ = lambda_scheduler_fn(domain_lambda , epoch)
 
+        if seed:
+            g = torch.Generator()
+            g.manual_seed(seed + epoch)
+            train_loader = DataLoader(
+                train_loader.dataset,
+                batch_size=train_loader.batch_size,
+                shuffle=True,
+                generator=g
+            )
+
+
         for batch_x, weights_batch, batch_y,subject_label in train_loader:
             batch_x = batch_x.to(device, dtype=torch.float32)
             batch_y = batch_y.to(device, dtype=torch.long)
@@ -208,7 +222,6 @@ def train_model(model,
         train_adv_f1 = f1_score(all_targets_train, all_preds_train_adv, average='weighted') if all_preds_train_adv else 0
 
 
-        train_loader.dataset.seed +=1
         # 📉 Validation
         model.eval() # Set model to evaluation mode
         val_loss = 0.0
