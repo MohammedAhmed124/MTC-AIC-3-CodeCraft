@@ -1,55 +1,225 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from functools import lru_cache
+
+from pathlib import Path
+
 import polars as pl
 
-base_path = "/kaggle/input/mtcaic3"
-
-train_df = pl.read_csv("/kaggle/input/mtcaic3/train.csv")
-validation_df = pl.read_csv("/kaggle/input/mtcaic3/validation.csv")
-test_df = pl.read_csv("/kaggle/input/mtcaic3/test.csv")
+import os
 
 
-def get_trials(data):
-    return [data.row(i, named=True) for i in range(data.height)]
 
 
-def load_data(trial):
-    id_num = trial["id"]
 
-    if id_num <= 4800:
-        type_dataset = "train"
-    elif id_num <= 4900:
-        type_dataset = "validation"
-    else:
-        type_dataset = "test"
+class Loader:
 
-    task = trial["task"]
-    subject_id = trial["subject_id"]
-    trial_session = trial["trial_session"]
-    trial_num = trial["trial"]
-    label = trial["label"]
+    def __init__(self, base_path: str = "/kaggle/input/mtcaic3"):
 
-    path = f"{base_path}/{task}/{type_dataset}/{subject_id}/{trial_session}/EEGdata.csv"
+        self.base_path = base_path
 
-    data = pl.read_csv(path)
-
-    s_r = 2250 if task == "MI" else 1750
-
-    s_i = (trial_num - 1) * s_r
-
-    trial_data = data.slice(s_i, s_r)
-
-    return trial_data
+        self.sample_rates = {"MI": 2250, "default": 1750}
 
 
-def get_data(trials):
-    return [load_data(trial) for trial in trials]
+
+        self.train_df = self._safe_read_csv(os.path.join(self.base_path, "train.csv"))
+
+        self.validation_df = self._safe_read_csv(
+
+            os.path.join(self.base_path, "validation.csv")
+
+        )
+
+        self.test_df = self._safe_read_csv(os.path.join(self.base_path, "test.csv"))
 
 
-train_trials = get_trials(train_df)
-test_trials = get_trials(test_df)
-validation_trials = get_trials(validation_df)
 
-new_data_trained = get_data(train_trials)
+    def _safe_read_csv(self, file_path):
 
-new_data_test = get_data(test_trials)
+        try:
 
-new_data_validation = get_data(validation_trials)
+            return pl.read_csv(file_path)
+
+        except Exception as e:
+
+            raise e
+
+
+
+    @lru_cache(maxsize=1000)
+
+    def _load_eeg_file(self, file_path):
+
+        try:
+
+            return pl.read_csv(file_path)
+
+        except Exception as e:
+
+            raise e
+
+
+
+    def _determine_dataset_type(self, id_num):
+
+        if id_num <= 4800:
+
+            return "train"
+
+        elif id_num <= 4900:
+
+            return "validation"
+
+        else:
+
+            return "test"
+
+
+
+    def _get_sample_rate(self, task):
+
+        return self.sample_rates.get(task, self.sample_rates["default"])
+
+
+
+    def _construct_data_path(self, task, subject_id, trial_session) -> Path:
+
+        return os.path.join(
+
+            self.base_path,
+
+            task,
+
+            "train",
+
+            str(subject_id),
+
+            str(trial_session),
+
+            "EEGdata.csv",
+
+        )
+
+
+
+    def get_trials_from_df(self, df):
+
+        return df.to_dicts()
+
+
+
+    def load_single_trial(self, trial):
+
+
+
+        try:
+
+            id_num = trial["id"]
+
+            task = trial["task"]
+
+            subject_id = trial["subject_id"]
+
+            trial_session = trial["trial_session"]
+
+            trial_num = trial["trial"]
+
+            label = trial["label"]
+
+
+
+            data_path = self._construct_data_path(task, subject_id, trial_session)
+
+
+
+            eeg_data = self._load_eeg_file(data_path)
+
+
+
+            sample_rate = self._get_sample_rate(task)
+
+
+
+            start_idx = (trial_num - 1) * sample_rate
+
+
+
+            trial_data = eeg_data.slice(start_idx, sample_rate)
+
+
+
+            return id_num, subject_id, task, trial_data, label
+
+
+
+        except Exception as e:
+
+            raise e
+
+
+
+    def load_data_parallel(self, trials, max_workers: int = 4):
+
+        ids, subjects, tasks, datas, labels = [], [], [], [], []
+
+
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+
+            future_to_trial = {
+
+                executor.submit(self.load_single_trial, trial): trial
+
+                for trial in trials
+
+            }
+
+
+
+        for future in as_completed(future_to_trial):
+
+            try:
+
+                id_num, subject_id, task, trial_data, label = future.result()
+
+                ids.append(id_num)
+
+                subjects.append(subject_id)
+
+                tasks.append(task)
+
+                datas.append(trial_data)
+
+                labels.append(label)
+
+
+
+            except Exception as e:
+
+                raise e
+
+
+
+        return ids, subjects, tasks, datas, labels
+
+
+
+
+
+loader = Loader()
+
+
+
+
+
+train_trials = loader.get_trials_from_df(loader.train_df)
+
+test_trials = loader.get_trials_from_df(loader.test_df)
+
+validation_trials = loader.get_trials_from_df(loader.validation_df)
+
+
+
+
+
+ids, sub, tasks, datas, labels = loader.load_data_parallel(train_trials)
