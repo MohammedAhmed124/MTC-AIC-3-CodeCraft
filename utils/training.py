@@ -206,6 +206,9 @@ def train_model(model,
         # Use average='weighted' for F1-score in multi-class classification
         train_f1 = f1_score(all_targets_train, all_preds_train, average='weighted')
         train_adv_f1 = f1_score(all_targets_train, all_preds_train_adv, average='weighted') if all_preds_train_adv else 0
+
+
+        train_loader.dataset.seed +=1
         # 📉 Validation
         model.eval() # Set model to evaluation mode
         val_loss = 0.0
@@ -337,7 +340,9 @@ def predict(
         num_samples_to_predict=None,
         num_classes=2,
         probability=False,
+        logits = False,
         device="cpu",
+        K=1,
         ):
     
 
@@ -430,16 +435,16 @@ def predict(
 
         k = 0 # Counter for original trials
         for i in range(0, outputs.shape[0], int(window_len)):
-            logits = outputs[i : i + int(window_len)] 
+            logits_outs = outputs[i : i + int(window_len)] 
             w_cur = weights[i : i + int(window_len)].unsqueeze(1) # [WINDOW_LEN, 1]
 
             # Re-enable weighted aggregation for validation!
             denom = w_cur.sum()
             if denom > 1e-8: # Add small epsilon to avoid division by zero
-                aggregated_outputs[k] = (logits * w_cur).sum(dim=0) / denom
+                aggregated_outputs[k] = (logits_outs * w_cur).sum(dim=0) / denom
             else:
                 # Fallback if weights are all zero for a trial's windows
-                aggregated_outputs[k] = logits.mean(dim=0) # Use unweighted mean as fallback
+                aggregated_outputs[k] = logits_outs.mean(dim=0) # Use unweighted mean as fallback
             
             k += 1
 
@@ -447,8 +452,12 @@ def predict(
 
         cpu_aggregated_outputs = aggregated_outputs.to("cpu")
         preds = torch.argmax(cpu_aggregated_outputs,axis = 1)
-
+    if probability and logits:
+        raise ValueError("Enter either logits or probability.. not both")
+    
     if probability:
-        return torch.softmax(cpu_aggregated_outputs, dim=1).numpy()
+        return torch.softmax(cpu_aggregated_outputs/K, dim=1).numpy()
+    if logits:
+        return cpu_aggregated_outputs/K
     else:
         return np.asarray(preds).reshape(-1,)

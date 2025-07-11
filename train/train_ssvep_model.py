@@ -9,6 +9,9 @@ from torch.utils.data import DataLoader
 
 
 
+SEED = 42
+torch.manual_seed(SEED)
+
 
 
 # -----------------------------------------------------------------------------
@@ -292,7 +295,10 @@ train_dataset = EEGDataset(train_ssvep_torch,weights_train_torch,train_ssvep_lab
 val_dataset =EEGDataset(val_ssvep_torch,weights_val_torch,val_ssvep_labels_torch,val_ssvep_torch_subject)
 test_dataset = EEGDataset(test_ssvep_torch,weights_test_torch,test_labels_placeholder,test_ssvep_torch_subject)
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True )
 val_loader   = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
 test_loader   = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
 

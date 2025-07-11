@@ -370,10 +370,9 @@ def preprocess_data(
 
 
         WINDOW_LEN = len(window)
-
     data = np.asarray(data)
     labels = np.asarray(label_list)
     subject_labels = np.asarray(subject_label_list)
     validation_weights = np.asarray(validation_weights)
 
-    return data,validation_weights, labels,subject_labels , WINDOW_LEN
+    return data,validation_weights, labels,subject_labels ,  WINDOW_LEN

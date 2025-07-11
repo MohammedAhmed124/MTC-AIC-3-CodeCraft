@@ -306,7 +306,9 @@ preds_mi_one = predict(
     loader=test_loader,
     num_samples_to_predict=50,
     device = device,
-    probability=True
+    logits=True,
+    probability=False,
+    K=1
     )
 
 
@@ -440,7 +442,9 @@ preds_mi_two = predict(
     loader=test_loader,
     num_samples_to_predict=50,
     device = device,
-    probability=True
+    logits = True,
+    probability=False,
+    K=0.2
     )
 
 
@@ -479,17 +483,24 @@ preds_mi_two = predict(
 
 from utils.rank_ensemble import RankAveragingEnsemble
 
-probs_list =  [
-    preds_mi_one,
-    preds_mi_two,
-]
-weights = [  1  , 1 ]
+# probs_list =  [
+#     preds_mi_one,
+#     preds_mi_two,
+# ]
+# weights = [  1  , 1 ]
 
-final_mi_predictions = RankAveragingEnsemble(
-    prob_list=probs_list,
-    weights=weights
-)
+# final_mi_predictions = RankAveragingEnsemble(
+#     prob_list=probs_list,
+#     weights=weights
+# )
 
+print(preds_mi_one)
+print(preds_mi_two)
+W1 = 1
+W2 = 1
+final_mi_predictions = np.argmax(np.sqrt(W1*preds_mi_two*W2*preds_mi_one),axis=1)
+
+final_mi_predictions = np.argmax((preds_mi_two+preds_mi_one)/2,axis=1)
 
 preds_mi_csv = pd.DataFrame({
     "id":ids_mi,

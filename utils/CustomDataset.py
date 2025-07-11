@@ -48,7 +48,7 @@ class EEGDataset(torch.utils.data.Dataset):
     >>> trial, weight, label, subject_id = dataset[0]
     """
 
-    def __init__(self, data_tensor, weigths, label_tensor, subject_labels, augment=False, augmentation_func=None):
+    def __init__(self, data_tensor, weigths, label_tensor, subject_labels, augment=False, augmentation_func=None,seed=None):
         # Input shape check
         assert data_tensor.shape[0] == label_tensor.shape[0] == weigths.shape[0] == subject_labels.shape[0], \
             "Mismatch in number of samples and labels"
@@ -59,7 +59,7 @@ class EEGDataset(torch.utils.data.Dataset):
         self.subject_labels = subject_labels
         self.augment = augment
         self.augmentation_func = augmentation_func
-
+        self.seed = seed
     def __len__(self):
         """
         Returns the number of samples in the dataset.
@@ -89,6 +89,6 @@ class EEGDataset(torch.utils.data.Dataset):
         if self.augment:
             if not callable(self.augmentation_func):
                 raise TypeError("Parameter 'augmentation_func' must be a callable when 'augment' is True.")
-            data = self.augmentation_func(data)
+            data = self.augmentation_func(data,seed=self.seed , idx = idx)
 
         return data, weight, label, subject_label

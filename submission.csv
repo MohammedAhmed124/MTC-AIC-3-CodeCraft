@@ -2,7 +2,7 @@ id,label
 4901,Left
 4902,Right
 4903,Right
-4904,Left
+4904,Right
 4905,Right
 4906,Left
 4907,Left
@@ -29,9 +29,9 @@ id,label
 4928,Left
 4929,Right
 4930,Left
-4931,Left
+4931,Right
 4932,Right
-4933,Left
+4933,Right
 4934,Left
 4935,Left
 4936,Right
@@ -44,8 +44,8 @@ id,label
 4943,Left
 4944,Left
 4945,Left
-4946,Right
-4947,Left
+4946,Left
+4947,Right
 4948,Right
 4949,Left
 4950,Left

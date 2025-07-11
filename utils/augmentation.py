@@ -27,7 +27,7 @@ class AddGaussianNoise:
         self.mean = mean
         self.std = std
 
-    def __call__(self, x):
+    def __call__(self, x,generator=None):
         """
         Apply Gaussian noise to the input tensor.
 
@@ -42,11 +42,12 @@ class AddGaussianNoise:
             A tensor of the same shape as `x`, with Gaussian noise added.
         """
         # Generate noise from normal distribution and add to the input
-        return x + torch.randn_like(x) * self.std + self.mean
+        noise = torch.randn(x.shape, dtype=x.dtype, device=x.device, generator=generator)
+        return x + noise * self.std + self.mean
 
 
 
-def augment_data(x):
+def augment_data(x , idx = None , seed = None):
     """
     Conditionally apply data augmentation to a tensor by adding Gaussian noise.
 
@@ -65,8 +66,15 @@ def augment_data(x):
         the original input is returned unchanged.
 
     """
+
+    if idx is not None:
+        # Create a local RNG with a deterministic seed
+        local_seed = seed + idx
+        g = torch.Generator()
+        g.manual_seed(local_seed)
+
     # Generate a random number from uniform[0,1] and apply noise with 40% chance
-    if torch.rand((1,)).item() < 0.4:
-        x = AddGaussianNoise(std=0.1)(x)
+    if torch.rand((1,) , generator=g).item() < 0.4:
+        x = AddGaussianNoise(std=0.1)(x,generator=g)
     
     return x

@@ -12,6 +12,9 @@ from torch.utils.data import DataLoader
 
 
 
+SEED = 42
+torch.manual_seed(SEED)
+
 
 
 # -----------------------------------------------------------------------------
@@ -286,9 +289,11 @@ test_mi_torch_subject = torch.from_numpy(subject_label_test_).to(torch.long)
 
 
 # Create TensorDatasets
-train_dataset = EEGDataset(train_mi_torch, weights_train_torch, train_mi_labels_torch , train_mi_torch_subject,augment=True,augmentation_func=augment_data)
+train_dataset = EEGDataset(train_mi_torch, weights_train_torch, train_mi_labels_torch , train_mi_torch_subject,augment=True,augmentation_func=augment_data,seed= SEED)
 val_dataset = EEGDataset(val_mi_torch, weights_val_torch, val_mi_labels_torch , val_mi_torch_subject)
 test_dataset = EEGDataset(test_mi_torch, weights_test_torch, test_labels_placeholder , test_mi_torch_subject)
+
+
 
 # Create DataLoaders
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

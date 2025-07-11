@@ -29,8 +29,8 @@ class EEGProcessor:
     COLUMNS_TO_DROP = ["Time", "Counter", "Battery"]
 
     # Quality thresholds
-    MIN_VALIDATION_THRESHOLD = 0.72
-    MAX_GYRO_THRESHOLD = 6.0
+    MIN_VALIDATION_THRESHOLD = 0
+    MAX_GYRO_THRESHOLD = 20
 
     def __init__(
         self, competitions_data_directory: str, output_directory: str = "data_fif"
