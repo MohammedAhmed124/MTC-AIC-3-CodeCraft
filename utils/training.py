@@ -1,6 +1,7 @@
 from torch.optim.lr_scheduler import *
 import math
 import torch
+from torch.utils.data import DataLoader
 import time
 import os
 from sklearn.metrics import f1_score , balanced_accuracy_score
@@ -12,6 +13,8 @@ import numpy as np
 
 from torch.utils.tensorboard import SummaryWriter
 
+def update_dataloader(dataset, new_batch_size, shuffle=True):
+    return DataLoader(dataset, batch_size=new_batch_size, shuffle=shuffle)
 
 def train_model(
     model,
@@ -34,6 +37,7 @@ def train_model(
     adversarial_epsilon=0.1,
     adversarial_alpha=0.01,
     adversarial_factor=0.5,
+    update_loader=None,
     n_classes=None,
     save_best_only=False,
 ):
@@ -51,6 +55,9 @@ def train_model(
     best_model_state = None
     best_epoch = -1
 
+    if update_loader:
+        update_epoch , batch_size = update_loader
+
     print("--- Starting Training Loop ---")
     for epoch in range(n_epochs):
         model.train()
@@ -64,6 +71,8 @@ def train_model(
             domain_lambda, adversarial_training, adversarial_steps, adversarial_epsilon, adversarial_alpha, adversarial_factor = scheduler_fn(
                 epoch + 1
             )
+        if epoch==update_epoch:
+            train_loader = update_dataloader(train_loader.dataset,new_batch_size=batch_size)
 
         for batch_x, weights_batch, batch_y, subject_label in train_loader:
             batch_x = batch_x.to(device, dtype=torch.float32)

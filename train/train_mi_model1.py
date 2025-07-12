@@ -354,7 +354,7 @@ device = torch.device(device_to_work_on)
 from torch.optim.lr_scheduler import *
 from model.MTCformerV3 import MTCFormer
 from utils.training import train_model,predict
-
+print(len(train_loader))
 model_former_curr = MTCFormer(
     depth=2,
     kernel_size=5,
@@ -363,8 +363,8 @@ model_former_curr = MTCFormer(
     eeg_ch_nums=4,
     class_num=2,
     class_num_domain=30,
-    modulator_dropout=0.2,
-    mid_dropout=0.5,
+    modulator_dropout=0.5,
+    mid_dropout=0.7,
     output_dropout=0.5,
     weight_init_mean=0,
     weight_init_std=0.5,
@@ -373,13 +373,13 @@ model_former_curr = MTCFormer(
 
 optimizer = Adam(model_former_curr.parameters(), lr=0.002)
 criterion = CrossEntropyLoss(reduction="none")
-scheduler = MultiStepLR(optimizer, milestones=[70 ], gamma=0.1)
+scheduler = MultiStepLR(optimizer, milestones=[200 ], gamma=0.1)
 
 def scheduler_fn(epoch):
     if epoch>=45:
         domain_lambda=0.01
         adversarial_training=True
-        adversarial_steps=2
+        adversarial_steps=1
         adversarial_epsilon=0.05
         adversarial_alpha= 0.005
         adversarial_factor=0.5
@@ -434,8 +434,8 @@ train_model(
     optimizer=optimizer,
     window_len=WINDOW_LEN,
     original_val_labels=orig_labels_val_torch,
-    n_epochs=250,
-    patience=100,
+    n_epochs=350,
+    patience=250,
     lr_scheduler=scheduler,
     scheduler_fn=scheduler_fn,
     domain_lambda=0.01,
@@ -443,6 +443,7 @@ train_model(
     adversarial_epsilon=0.05,
     adversarial_alpha = 0.005,
     adversarial_training=True,
+    update_loader=(40 , 100),
     save_best_only=True,
     save_path = save_path,
     n_classes=2,

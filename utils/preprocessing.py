@@ -224,7 +224,7 @@ def preprocess_one_file(
     mne_file = deepcopy(mne_file)
 
 
-
+    mne_file.crop(2.5 , 7)
     mne_file.notch_filter(freqs=notch_freqs, verbose=False, notch_widths=notch_width,
                           filter_length="auto",
                           picks='eeg',)
