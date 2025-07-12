@@ -262,7 +262,7 @@ print("Data Preparation.... Wrapping preprocessed data inside tensor datasets...
 if TEST_MODE:
     batch_size=10
 else:
-    batch_size=100
+    batch_size=1000
 
 # Convert numpy arrays to PyTorch tensors with correct dtypes
 orig_labels_val_torch = torch.from_numpy(val_labels_mi_mapped).to(torch.long) # Original labels for validation aggregation
@@ -355,47 +355,105 @@ from torch.optim.lr_scheduler import *
 from model.MTCformerV3 import MTCFormer
 from utils.training import train_model,predict
 
-model_former_curr = MTCFormer(depth=2,
-                    kernel_size=5,
-                    n_times=600,
-                    chs_num=7,
-                    eeg_ch_nums=4,
-                    class_num=2,
-                    class_num_domain=30,
-                    modulator_dropout=0.3,
-                    mid_dropout=0.5,
-                    output_dropout=0.5,
-                    weight_init_mean=0,
-                    weight_init_std=0.5,
-                    ).to(device)
+model_former_curr = MTCFormer(
+    depth=2,
+    kernel_size=5,
+    n_times=600,
+    chs_num=7,
+    eeg_ch_nums=4,
+    class_num=2,
+    class_num_domain=30,
+    modulator_dropout=0.2,
+    mid_dropout=0.5,
+    output_dropout=0.5,
+    weight_init_mean=0,
+    weight_init_std=0.5,
+    seed = 100,
+).to(device)
 
 optimizer = Adam(model_former_curr.parameters(), lr=0.002)
 criterion = CrossEntropyLoss(reduction="none")
-scheduler = MultiStepLR(optimizer, milestones=[50], gamma=0.1)
+scheduler = MultiStepLR(optimizer, milestones=[70 ], gamma=0.1)
 
-save_path=os.path.join(SCRIPT_PATH,"checkpoints","model_1_mi_checkpoint")
-train_model(model_former_curr,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        criterion=criterion,
-        optimizer=optimizer,
-        window_len=WINDOW_LEN,
-        original_val_labels=orig_labels_val_torch,
-        n_epochs=250,
-        patience=100,
-        scheduler=scheduler,
-        domain_lambda=0.01,
-        lambda_scheduler_fn=None,
-        adversarial_steps =1,
-        adversarial_epsilon=0.05,
-        adversarial_alpha = 0.005,
-        adversarial_training=True,
-        save_best_only=True,
-        save_path = save_path,
-        n_classes=2,
-        device = device
+def scheduler_fn(epoch):
+    if epoch>=45:
+        domain_lambda=0.01
+        adversarial_training=True
+        adversarial_steps=2
+        adversarial_epsilon=0.05
+        adversarial_alpha= 0.005
+        adversarial_factor=0.5
+
+    
+    else:
+        domain_lambda=0.01
+        adversarial_steps =1
+        adversarial_epsilon=0.05
+        adversarial_alpha = 0.005
+        adversarial_training=True
+        adversarial_factor=0.5
+
+    return (
+        domain_lambda,
+        adversarial_training,
+        adversarial_steps,
+        adversarial_epsilon,
+        adversarial_alpha,
+        adversarial_factor
     )
 
+
+import subprocess
+import os
+import shutil
+import webbrowser
+import time
+
+save_path=os.path.join(SCRIPT_PATH,"checkpoints","model_1_mi_checkpoint")
+logs_path = os.path.join(save_path,"logs")
+
+if os.path.exists(logs_path):
+    shutil.rmtree(logs_path)
+
+os.makedirs(logs_path, exist_ok=True)
+
+port = 6006
+subprocess.Popen(["tensorboard", "--logdir", logs_path, "--port", f"{port}", "--bind_all","--reload_interval", "1"])
+
+print("Waiting")
+time.sleep(5)
+
+# Open the browser to the TensorBoard URL
+webbrowser.open(f"http://localhost:{port}") #http://localhost:6006
+
+train_model(
+    model_former_curr,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    criterion=criterion,
+    optimizer=optimizer,
+    window_len=WINDOW_LEN,
+    original_val_labels=orig_labels_val_torch,
+    n_epochs=250,
+    patience=100,
+    lr_scheduler=scheduler,
+    scheduler_fn=scheduler_fn,
+    domain_lambda=0.01,
+    adversarial_steps =1,
+    adversarial_epsilon=0.05,
+    adversarial_alpha = 0.005,
+    adversarial_training=True,
+    save_best_only=True,
+    save_path = save_path,
+    n_classes=2,
+    device = device
+)
+
+
+
+
+
+                 
 
 
 #Best Checkpoint for this training session (not the absolute best checkpoint) is saved to  project_directory/train/checkpoints/model_1_mi_checkpoint/best_model_.pth

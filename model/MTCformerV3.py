@@ -238,14 +238,15 @@ class DomainClassifier(nn.Module):
             proj_dim
             ):
         super().__init__()
+        headin_dim = 100
         self.net = nn.Sequential(
             nn.Flatten(),
             nn.Dropout(dropout),
-            nn.Linear(n_times * proj_dim, class_num_domain * 6),
-            nn.LayerNorm(class_num_domain * 6),
+            nn.Linear(n_times * proj_dim, headin_dim),
+            nn.LayerNorm(headin_dim),
             nn.GELU(),
             nn.Dropout(0.5),
-            nn.Linear(class_num_domain * 6, class_num_domain)
+            nn.Linear(headin_dim, class_num_domain)
         )
 
     def forward(self, features, lambda_):
@@ -403,11 +404,12 @@ class PointWiseConvolutionalBlock(nn.Module):
     - So when we want to call forward we call it via 'parent.PointWiseConvolution(x)'
 
     """
-    def __init__(self,
-                output_chs,
-                proj_dim,
-                dropout
-                ):
+    def __init__(
+            self,
+            output_chs,
+            proj_dim,
+            dropout
+            ):
         super().__init__() 
 
         self.conv = nn.Conv1d(output_chs, proj_dim, 1, padding= "same", groups=1)
@@ -429,6 +431,68 @@ class PointWiseConvolutionalBlock(nn.Module):
 
         parent.PointWiseConvolution = self.forward
 
+class LearnablePooling(nn.Module):
+    def __init__(
+            self,
+            input_chans,
+            n_times,
+            kernel_size,
+            dropout,
+            ):
+        
+        super().__init__()
+
+        def compute_padding(kernel_size, stride=2):
+            return (kernel_size - stride + 1) // 2
+
+        pad1 = compute_padding(kernel_size)
+        
+        out_chans = int(input_chans//2)
+        self.pooler_1 = nn.Conv1d(
+            in_channels=input_chans,
+            out_channels=out_chans,
+            kernel_size=kernel_size,
+            stride=2,
+            padding=pad1
+        )
+        self.norm_1 = ChannelWiseLayerNorm(out_chans)
+        self.activation_1 = nn.GELU()
+
+        # self.pooler_2 = nn.Conv1d(
+        #     in_channels=out_chans,
+        #     out_channels=out_chans,
+        #     kernel_size=int(kernel_size//2),
+        #     stride=2,
+        #     padding=pad2
+        # )
+        # self.norm_2 = ChannelWiseLayerNorm(out_chans)
+        # self.activation_2 = nn.GELU()
+
+        self.skip_proj = nn.Sequential(
+        nn.Conv1d(input_chans, out_chans, kernel_size=1, stride=2),
+        ChannelWiseLayerNorm(out_chans)
+)
+
+    def forward(self , x):
+
+        residual = self.skip_proj(x)  # [B, C//2, T//4]
+
+        x = self.pooler_1(x)          # [B, C//2, T//2]
+        x = self.norm_1(x)
+        x = self.activation_1(x)
+
+        # x = self.pooler_2(x)          # [B, C//2, T//4]
+        # x = self.norm_2(x)
+        # x = self.activation_2(x)
+
+        x = x + residual              
+        # residual connection: why? its a path where not much learning goes on and so the network might fall back to it
+        #incase some information are lost in the original pooling path 
+        return x
+
+        
+        
+
 class MTCFormer(nn.Module):
     def __init__(self,
                  depth,
@@ -439,12 +503,15 @@ class MTCFormer(nn.Module):
                  class_num,
                  class_num_domain,
                  modulator_kernel_size=5,
+                 pooler_kernel_size=10,
                  domain_dropout=0.5,
                  modulator_dropout=0.5,
                  mid_dropout=0.6,
+                 pooler_dropout=0.3,
                  output_dropout=0.4,
                  weight_init_std = 0.01,
                  weight_init_mean = 0.00,
+                 seed = None,
                  ):
         
 
@@ -550,37 +617,61 @@ class MTCFormer(nn.Module):
             kernel_size,
             mid_dropout
             )
+        self.learned_pooling = LearnablePooling(
+            input_chans=proj_dim,
+            n_times=n_times,
+            kernel_size=pooler_kernel_size,
+            dropout=pooler_dropout,
+        )
 
+        proj_dim_pooled = proj_dim // 2
+        n_times_pooled = n_times // 2  # because stride=2 twice
+        task_headen_state = 30
         self.mlp_head = nn.Sequential(
             nn.Flatten(),
             nn.Dropout(output_dropout),
-            nn.Linear(n_times * proj_dim, class_num * 6),
-            nn.LayerNorm(class_num * 6),
+            nn.Linear(n_times_pooled * proj_dim_pooled, task_headen_state),
+            nn.LayerNorm(task_headen_state),
             nn.GELU(),
             nn.Dropout(0.5),
-            nn.Linear(class_num * 6, class_num)
+            nn.Linear(task_headen_state, class_num)
         )
 
         self.domain_classifier = DomainClassifier(
             class_num_domain=class_num_domain,
-            n_times=n_times,
+            n_times=n_times_pooled,
             dropout=domain_dropout,
-            proj_dim=proj_dim
+            proj_dim=proj_dim_pooled
         )
 
-        for m in self.modules():
-            if isinstance(m, (nn.Conv1d, nn.Linear)):
-                # nn.init.normal_(m.weight, mean=weight_init_mean, std=weight_init_std)
-                nn.init.xavier_normal_(m.weight)
+        self.init_weights_with_seed( seed=seed)
 
 
     def forward(self, x,domain_lambda):
         x = self.temporal_attention(x)       
-        x = self.PointWiseConvolution(x)
-        x_shared = self.transformer(x)  
+        x = self.PointWiseConvolution(x) *40
+        x = self.transformer(x)  *20
+        x_shared = self.learned_pooling(x)*10
 
 
         domain_output = self.domain_classifier(x_shared,domain_lambda)
         label_output =  self.mlp_head(x_shared)
         return label_output , domain_output
+    
+    def init_weights_with_seed(self, seed=None):
+        if seed:
+            rng_state = torch.get_rng_state()
+            torch.manual_seed(seed)
+
+
+        for name, m in self.named_modules():
+            if isinstance(m, (nn.Conv1d, nn.Linear)):
+                if 'temporal_attention' in name or 'PointWise' in name:
+                    nn.init.normal_(m.weight, mean=0.0, std=0.5)  # 🟢 Bigger std
+                else:
+                    nn.init.xavier_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+        if seed:
+            torch.set_rng_state(rng_state)
 

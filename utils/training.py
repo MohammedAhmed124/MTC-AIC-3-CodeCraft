@@ -8,194 +8,107 @@ from .gradient_attack import GradientAttack #Function for gradient attack
 from .rank_ensemble import RankAveragingEnsemble
 import numpy as np
 
-def train_model(model,
-                train_loader=None,
-                val_loader=None,
-                criterion=None,
-                optimizer=None,
-                window_len=None,
-                original_val_labels=None,
-                n_epochs=500,
-                patience=200,
-                device="cuda",
-                save_model_checkpoints=True,
-                save_path = "DeepConvNetMI",
-                scheduler=None,
-                domain_lambda=0.1,
-                lambda_scheduler_fn=None,
-                adversarial_training=True,
-                adversarial_steps =10,
-                adversarial_epsilon=0.1,
-                adversarial_alpha = 0.01,
-                adversarial_factor=0.5,
-                n_classes=None,
-                save_best_only=False,
-                ):
-    
-    """
-    The function Trains a neural network model with optional Domain-Adversarial training and adversarial robustness.
 
-    This function is designed for EEG-based classification models trained on windowed input sequences. It supports:
-    - Domain-Adversarial Neural Networks (DANN) training through a domain classifier branch.
-    - Gradient-based adversarial training for robustness.
-    - Various scheduler types (e.g., for learning rate or domain λ).
-    - Per-window training and per-trial validation aggregation.
-    - Early stopping and checkpointing based on validation balanced accuracy.
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        The model to train. It should return two outputs: (label_predictions, domain_predictions).
-    
-    train_loader : DataLoader
-        DataLoader yielding batches of windowed training samples. Each batch should be in the form:
-        (X, sample_weights, labels, subject_labels).
+from torch.utils.tensorboard import SummaryWriter
 
-    val_loader : DataLoader
-        DataLoader for validation, with the same format as train_loader.
-    
-    criterion : torch.nn loss function
-        Loss function to apply to classification and domain predictions.
 
-    optimizer : torch.optim.Optimizer
-        The optimizer to use during training (e.g., Adam, SGD).
+def train_model(
+    model,
+    train_loader=None,
+    val_loader=None,
+    criterion=None,
+    optimizer=None,
+    window_len=None,
+    original_val_labels=None,
+    n_epochs=500,
+    patience=200,
+    device="cuda",
+    save_model_checkpoints=True,
+    save_path="DeepConvNetMI",
+    lr_scheduler=None,
+    scheduler_fn=None,
+    domain_lambda=0.1,
+    adversarial_training=True,
+    adversarial_steps=10,
+    adversarial_epsilon=0.1,
+    adversarial_alpha=0.01,
+    adversarial_factor=0.5,
+    n_classes=None,
+    save_best_only=False,
+):
 
-    window_len : int
-        Number of windows per original EEG trial. Used to aggregate per-window predictions into trial-level predictions.
 
-    original_val_labels : torch.Tensor
-        Tensor of original trial-level ground truth labels (used to evaluate validation performance).
+    writer = SummaryWriter(log_dir=os.path.join(save_path, "logs"))
 
-    n_epochs : int, optional
-        Number of epochs to train (default is 500).
-
-    patience : int, optional
-        Early stopping patience (default is 200). Training stops if no improvement for `patience` consecutive epochs.
-
-    device : str, optional
-        Device to train on, either "cuda" or "cpu" (default is "cuda").
-
-    save_model_checkpoints : bool, optional
-        Whether to save model checkpoints after every epoch (default is True).
-
-    save_path : str, optional
-        Directory path to store model checkpoints (default is "DeepConvNetMI").
-
-    scheduler : torch.optim.lr_scheduler._LRScheduler or ReduceLROnPlateau, optional
-        Learning rate scheduler. If ReduceLROnPlateau, it steps based on validation accuracy.
-
-    domain_lambda : float, optional
-        Initial lambda value for DANN domain loss. If set to 0.0, DANN is deactivated.
-
-    lambda_scheduler_fn : callable, optional
-        A function taking (initial_lambda, current_epoch) and returning a new lambda. Used to adjust domain_lambda over time.
-
-    adversarial_training : bool, optional
-        If True, adversarial examples are generated using gradient attacks to improve model robustness (default is True).
-
-    adversarial_steps : int, optional
-        Number of gradient steps in adversarial attack (default is 10).
-
-    adversarial_epsilon : float, optional
-        Maximum L∞ perturbation allowed in adversarial attack (default is 0.1).
-
-    adversarial_alpha : float, optional
-        Step size per iteration in adversarial attack (default is 0.01).
-
-    adversarial_factor : float, optional
-        Weight of adversarial loss in the total training loss (default is 0.5).
-
-    n_classes : int, optional
-        Number of classes in the classification task .
-
-    Returns
-    -------
-    None
-        Trains the model in-place and saves the best model (based on validation balanced accuracy) as a state_dict checkpoint.
-
-    Notes
-    -----
-    -  DANN Activation: The domain classifier is only trained if `domain_lambda > 0`. If it's set to 0, the domain loss has no effect.
-    -  Adversarial Training: When `adversarial_training=True`, adversarial samples are created using PGD-style attack (multi-step FGSM).
-    -  Validation Aggregation: During validation, predictions for each window in a trial are soft-averaged using `weights_val_batch`.
-       These weights are derived from the "Validation" EEG channel helps weigh windows with more reliable measurements. where more corrupted windows correspond to less weights.
-    -  Schedulers:
-        - Standard schedulers are stepped every epoch.
-        - If using `ReduceLROnPlateau`, it's stepped based on validation balanced accuracy.
-        - Custom lambda scheduler (`lambda_scheduler_fn`) dynamically adjusts domain loss weight.
-
-    """
-    if isinstance(device,str):
+    if isinstance(device, str):
         device = torch.device(device)
-    
-    if os.path.isdir(save_path):
-        print("Path Exists. Contents of this folder will be modified save_path is : ",save_path)
-    else:
-        print("Making a new directory at : ", save_path , " Checkpoints will be saved there. ")
-        os.makedirs(save_path, exist_ok=True) 
-    domain_lambda_ = domain_lambda
-    best_val_metric = float('-inf') # Store balanced accuracy
+
+    os.makedirs(save_path, exist_ok=True)
+
+    best_val_metric = float("-inf")
     epochs_without_improvement = 0
     best_model_state = None
-    best_epoch = -1 # To track the epoch of the best model
-        # --- 4. Training Loop ---
+    best_epoch = -1
+
     print("--- Starting Training Loop ---")
     for epoch in range(n_epochs):
-        model.train() # Set model to training mode
+        model.train()
         epoch_loss = 0.0
         all_preds_train = []
         all_targets_train = []
-        all_preds_train_adv=[]
+        all_preds_train_adv = []
         start_time = time.time()
 
-        # if 'scheduler' in locals() and scheduler is not None:
-        #     scheduler.step() # Step the scheduler after optimizer.step() if you want per-epoch updates
-        if lambda_scheduler_fn:
-                domain_lambda_ = lambda_scheduler_fn(domain_lambda , epoch)
+        if scheduler_fn:
+            domain_lambda, adversarial_training, adversarial_steps, adversarial_epsilon, adversarial_alpha, adversarial_factor = scheduler_fn(
+                epoch + 1
+            )
 
-        for batch_x, weights_batch, batch_y,subject_label in train_loader:
+        for batch_x, weights_batch, batch_y, subject_label in train_loader:
             batch_x = batch_x.to(device, dtype=torch.float32)
             batch_y = batch_y.to(device, dtype=torch.long)
             weights_batch = weights_batch.to(device, dtype=torch.float32)
-            subject_label = subject_label.to(device,dtype=torch.long)
+            subject_label = subject_label.to(device, dtype=torch.long)
 
             if adversarial_training:
-                model.eval()#Freezes model for attack generation (because we don't want to change model weights at this stage)
-                batch_x_adv = GradientAttack(model, batch_x, batch_y, criterion,
-                            alpha=adversarial_alpha,
-                            epsilon=adversarial_epsilon,
-                            steps=adversarial_steps,
-                            clamp_min=-16.8080,
-                            clamp_max=16.8080)
+                model.eval()
+                batch_x_adv = GradientAttack(
+                    model,
+                    batch_x,
+                    batch_y,
+                    criterion,
+                    alpha=adversarial_alpha,
+                    epsilon=adversarial_epsilon,
+                    steps=adversarial_steps,
+                    clamp_min=-16.8080,
+                    clamp_max=16.8080,
+                )
                 model.train()
+
             optimizer.zero_grad()
 
-            outputs_labels,outputs_domain = model(batch_x,domain_lambda_)
+            outputs_labels, outputs_domain = model(batch_x, domain_lambda)
             if adversarial_training:
-                outputs_adv_labels,_ = model(batch_x_adv,domain_lambda_)
+                outputs_adv_labels, _ = model(batch_x_adv, domain_lambda)
 
-            label_loss= criterion(outputs_labels, batch_y) 
-            domain_loss = criterion(outputs_domain,subject_label)
-            if adversarial_training:
-                adv_loss = criterion(outputs_adv_labels,batch_y)
-            else:
-                adv_loss=torch.tensor(0.0)
+            label_loss = criterion(outputs_labels, batch_y)
+            domain_loss = criterion(outputs_domain, subject_label)
+            adv_loss = criterion(outputs_adv_labels, batch_y) if adversarial_training else torch.tensor(0.0)
 
-            label_loss = (label_loss * weights_batch).mean() # Re-enable weighted loss!
+            label_loss = (label_loss * weights_batch).mean()
             domain_loss = domain_loss.mean()
             adv_loss = adv_loss.mean()
 
-            total_loss = label_loss  +   domain_loss   +    adversarial_factor * adv_loss
-
+            total_loss = label_loss + domain_loss + adversarial_factor * adv_loss
             total_loss.backward()
-
             optimizer.step()
+
             epoch_loss += total_loss.item() * batch_x.size(0)
 
             preds = torch.argmax(outputs_labels, dim=1)
             if adversarial_training:
                 preds_adv = torch.argmax(outputs_adv_labels, dim=1)
-
 
             if adversarial_training:
                 all_preds_train_adv.extend(preds_adv.cpu().numpy())
@@ -203,81 +116,89 @@ def train_model(model,
             all_targets_train.extend(batch_y.cpu().numpy())
 
         avg_train_loss = epoch_loss / len(train_loader.dataset)
-        # Use average='weighted' for F1-score in multi-class classification
-        train_f1 = f1_score(all_targets_train, all_preds_train, average='weighted')
-        train_adv_f1 = f1_score(all_targets_train, all_preds_train_adv, average='weighted') if all_preds_train_adv else 0
-        # 📉 Validation
-        model.eval() # Set model to evaluation mode
+        train_f1 = f1_score(all_targets_train, all_preds_train, average="weighted")
+        train_adv_f1 = (
+            f1_score(all_targets_train, all_preds_train_adv, average="weighted")
+            if all_preds_train_adv
+            else 0
+        )
+
+        model.eval()
         val_loss = 0.0
         val_preds = []
         val_targets = []
 
         with torch.no_grad():
-            for val_x, weights_val_batch, val_y_windowed,_ in val_loader:
+            for val_x, weights_val_batch, val_y_windowed, _ in val_loader:
                 val_x = val_x.to(device, dtype=torch.float32)
-                val_y_windowed = val_y_windowed.to(device, dtype=torch.long) # Not directly used for loss, but kept for consistency
+                val_y_windowed = val_y_windowed.to(device, dtype=torch.long)
                 weights_val_batch = weights_val_batch.to(device, dtype=torch.float32)
 
-                val_outputs_raw, domain_outputs = model(val_x,domain_lambda_)
-
-
+                val_outputs_raw, domain_outputs = model(val_x, domain_lambda)
                 num_original_trials_val = original_val_labels.shape[0]
-                aggregated_outputs = torch.zeros((num_original_trials_val, n_classes), device=device, dtype=torch.float32)
-                
-                k = 0 # Counter for original trials
+                aggregated_outputs = torch.zeros((num_original_trials_val, n_classes), device=device)
+
+                k = 0
                 for i in range(0, val_outputs_raw.shape[0], int(window_len)):
-                    logits = val_outputs_raw[i : i + int(window_len)] # [WINDOW_LEN_GLOBAL, n_classes]
-                    w_cur = weights_val_batch[i : i + int(window_len)].unsqueeze(1) # [WINDOW_LEN_GLOBAL, 1]
-                    # Re-enable weighted aggregation for validation!
+                    logits = val_outputs_raw[i : i + int(window_len)]
+                    w_cur = weights_val_batch[i : i + int(window_len)].unsqueeze(1)
                     denom = w_cur.sum()
-                    if denom > 1e-8: # Add small epsilon to avoid division by zero
+                    if denom > 1e-8:
                         aggregated_outputs[k] = (logits * w_cur).sum(dim=0) / denom
                     else:
-                        # Fallback if weights are all zero for a trial's windows
-                        aggregated_outputs[k] = logits.mean(dim=0) # Use unweighted mean as fallback
-                    
+                        aggregated_outputs[k] = logits.mean(dim=0)
                     k += 1
-                
-                
-                # Loss for aggregated outputs against original labels
-                loss = criterion(aggregated_outputs, original_val_labels.to(device)).mean() # Use mean reduction for aggregated loss
-                val_loss += loss.item() * aggregated_outputs.size(0)
 
+                loss = criterion(aggregated_outputs, original_val_labels.to(device)).mean()
+                val_loss += loss.item() * aggregated_outputs.size(0)
                 preds_agg = torch.argmax(aggregated_outputs, dim=1)
                 val_preds.extend(preds_agg.cpu().numpy())
-                val_targets.extend(original_val_labels.cpu().numpy()) # Use original labels for
-            
-        avg_val_loss = val_loss / len(val_preds) # Use number of aggregated predictions for average loss
-        val_f1 = f1_score(val_targets, val_preds, average='weighted')
+                val_targets.extend(original_val_labels.cpu().numpy())
+
+        avg_val_loss = val_loss / len(val_preds)
+        val_f1 = f1_score(val_targets, val_preds, average="weighted")
         val_bal_acc = balanced_accuracy_score(val_targets, val_preds)
 
-        # --- 6. Checkpointing and Early Stopping ---
-        # Save checkpoint every epoch for robust recovery, or modify to save less frequently
+        writer.add_scalar("Loss/train", avg_train_loss, epoch + 1)
+        writer.add_scalar("Loss/val", avg_val_loss, epoch + 1)
+        writer.add_scalar("F1/train", train_f1, epoch + 1)
+        writer.add_scalar("F1/train_adv", train_adv_f1, epoch + 1)
+        writer.add_scalar("F1/val", val_f1, epoch + 1)
+        writer.add_scalar("BalancedAccuracy/val", val_bal_acc, epoch + 1)
+        writer.add_scalar("Lambda/domain", domain_lambda, epoch + 1)
+        writer.add_scalar("Lambda/domain_loss", domain_lambda, epoch + 1)
+        writer.add_scalar("Adversarial/steps", adversarial_steps, epoch + 1)
+        writer.add_scalar("Adversarial/epsilon", adversarial_epsilon, epoch + 1)
+        writer.add_scalar("Adversarial/alpha", adversarial_alpha, epoch + 1)
+        writer.add_scalar("Adversarial/factor", adversarial_factor, epoch + 1)
 
-        if scheduler is not None:
-            # Check the type of scheduler to step correctly
-            if isinstance(scheduler, ReduceLROnPlateau):
-                # For ReduceLROnPlateau, step with the validation metric you are monitoring
-                scheduler.step(val_bal_acc)
+        for name, param in model.named_parameters():
+            writer.add_histogram(name, param, epoch)
+
+
+        if lr_scheduler:
+            if isinstance(lr_scheduler, ReduceLROnPlateau):
+                lr_scheduler.step(val_bal_acc)
             else:
-                scheduler.step()
-
+                lr_scheduler.step()
 
         if save_model_checkpoints:
             if save_best_only:
                 if val_bal_acc > best_val_metric:
                     save_path_for_best_version = os.path.join(save_path, "best_model_.pth")
+
                     torch.save(
                         {
                             "epoch": epoch + 1,
                             "model_state_dict": model.state_dict(),
                             "optimizer_state_dict": optimizer.state_dict(),
                             "val_f1": val_f1,
-                            "val_bal_acc": val_bal_acc
+                            "val_bal_acc": val_bal_acc,
                         },
-                        save_path_for_best_version
+                        save_path_for_best_version,
                     )
                     print("✅ Best checkpoint updated (save_best_only=True). at ",save_path)
+
             else:
                 torch.save(
                     {
@@ -285,44 +206,40 @@ def train_model(model,
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                         "val_f1": val_f1,
-                        "val_bal_acc": val_bal_acc
+                        "val_bal_acc": val_bal_acc,
                     },
-                    os.path.join(save_path, f"checkpoint_epoch_{epoch+1:03d}.pth")
+                    os.path.join(save_path, f"checkpoint_epoch_{epoch+1:03d}.pth"),
                 )
                 print(f"🟢 Checkpoint saved for epoch {epoch+1}")
 
-        # Early stopping logic: Use val_bal_acc as the primary metric
         if val_bal_acc > best_val_metric:
             best_val_metric = val_bal_acc
             epochs_without_improvement = 0
             best_model_state = model.state_dict()
             best_epoch = epoch + 1
             print("🟢 Valid" "ation Balanced Accuracy improved. Saving best model state...")
+
         else:
             epochs_without_improvement += 1
             print(f"🟡 No improvement for {epochs_without_improvement} epochs.")
 
+
         if epochs_without_improvement >= patience:
-            print(f"🔴 Early stopping triggered after {epoch+1} epochs. Best Balanced Accuracy: {best_val_metric:.4f} at epoch {best_epoch}")
+            print(f"🔴 Early stopping triggered at epoch {epoch+1}. Best Balanced Accuracy: {best_val_metric:.4f}")
             break
 
-        # --- 7. Logging ---
         print(f"Epoch [{epoch+1}/{n_epochs}] - "
             f"Train Loss: {avg_train_loss:.4f}, Train F1: {train_f1:.4f} | adversarial F1 : {train_adv_f1:.4f} | "
             f"Val Loss: {avg_val_loss:.4f}, Val F1: {val_f1:.4f} | "
             f"Time: {time.time() - start_time:.1f}s | "
             f"Balanced Accuracy Val: {val_bal_acc:.4f} | - "
-            f"Domain Loss: {domain_loss:.4f}")
+            f"Domain Loss: {domain_loss:.4f}")        
 
-    # --- 8. Final Actions After Training ---
-    print("\n--- Training Finished ---")
+    writer.close()
+    print("--- Training Finished ---")
     if best_model_state:
         print(f"Best validation Balanced Accuracy: {best_val_metric:.4f} achieved at Epoch {best_epoch}")
     return best_epoch
-
-
-
-
 
 
 
