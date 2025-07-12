@@ -3,10 +3,12 @@ from functools import lru_cache
 from pathlib import Path
 import polars as pl
 import os
+import sys
+import numpy as np
 
-
+base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)) , "data")
 class Loader:
-    def __init__(self, base_path: str = "/kaggle/input/mtcaic3"):
+    def __init__(self, base_path: str = base_path):
         self.base_path = base_path
         self.sample_rates = {"MI": 2250, "default": 1750}
 
@@ -50,10 +52,14 @@ class Loader:
             "EEGdata.csv",
         )
 
-    def get_trials_from_df(self, df):
-        return df.to_dicts()
+    def get_trials_from_df(self, df,task_type=None):
+        assert task_type in ["SSVEP" , "MI"], "task type should be specified and be either SSVEP or MI"
+        return [
+            dict_items for dict_items in df.to_dicts() 
+            if dict_items["task"]==task_type
+        ]
 
-    def load_single_trial(self, trial):
+    def load_single_trial(self, trial,quality_filter= None):
 
         try:
             id_num = trial["id"]
@@ -73,41 +79,107 @@ class Loader:
 
             trial_data = eeg_data.slice(start_idx, sample_rate)
 
+            shared_cols = ['Acc_norm', 'gyro_norm', 'Validation']
+
+            if task == "MI":
+                eeg_cols = ['C3', 'C4', 'CZ', 'FZ']
+            elif task == "SSVEP":
+                eeg_cols = ['OZ', 'PO7', 'PO8', 'PZ']
+            else:
+                raise ValueError(f"{task} is not a valid type")
+
+            cols_to_pick = eeg_cols + shared_cols
+            polars_cols = [pl.col(col) for col in cols_to_pick]
+            
+
+            trial_data = trial_data.with_columns(
+                (pl.col("AccX").pow(2) + pl.col("AccY").pow(2) + pl.col("AccZ").pow(2)).sqrt().alias("Acc_norm"),
+                (pl.col("Gyro1").pow(2) + pl.col("Gyro2").pow(2) + pl.col("Gyro3").pow(2)).sqrt().alias("gyro_norm"),
+            ).select(
+                polars_cols
+            )
+
+            if quality_filter:
+                #ignore bad quality trials
+                #the quality filter paramater accepts a tuple (minimum_accepted_validation, maximum_accepted_gyro, maximum accepted acc)
+                #if the paramater is passed 'None' Filtering does not occur
+                #if one of the tuples elements is passed None, Filtering does not occure on the corresponding metrics value
+                ####----Don't use this for Testing data----####
+                assert len(quality_filter) == 3, (
+                    "quality_filter must be a 3-tuple: "
+                    "(minimum_accepted_validation, maximum_accepted_gyro, maximum_accepted_acc)"
+                )
+
+                min_val, max_gyro, max_acc = quality_filter
+
+                means = trial_data.select([
+                    pl.col("Validation").mean().alias("mean_val"),
+                    pl.col("gyro_norm").mean().alias("mean_gyro"),
+                    pl.col("Acc_norm").mean().alias("mean_acc")
+                ])
+
+                mean_val = means["mean_val"][0]
+                mean_gyro = means["mean_gyro"][0]
+                mean_acc = means["mean_acc"][0]
+
+                if min_val is not None and mean_val < min_val:
+                    return None
+                if max_gyro is not None and mean_gyro > max_gyro:
+                    return None
+                if max_acc is not None and mean_acc > max_acc:
+                    return None
+                
+                        
+
             return id_num, subject_id, task, trial_data, label
 
         except Exception as e:
             raise e
 
-    def load_data_parallel(self, trials, max_workers: int = 4):
+    def load_data_parallel(self, trials,quality_filter=None,return_numpy=False, max_workers: int = 4):
         ids, subjects, tasks, datas, labels = [], [], [], [], []
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_trial = {
-                executor.submit(self.load_single_trial, trial): trial
+                executor.submit(self.load_single_trial, trial , quality_filter): trial
                 for trial in trials
             }
 
         for future in as_completed(future_to_trial):
+            if not future.result():
+                continue
             try:
                 id_num, subject_id, task, trial_data, label = future.result()
                 ids.append(id_num)
-                subjects.append(subject_id)
+                subjects.append(int(subject_id.lstrip("S"))-1)
                 tasks.append(task)
                 datas.append(trial_data)
                 labels.append(label)
 
             except Exception as e:
                 raise e
+            
+            
+        assert len(ids) == len(subjects)== len(tasks) == len(datas) == len(labels), "Mismatch in returns lengths"
+        if return_numpy:
+            labels = np.asarray(labels)
+            subjects = np.asarray(subjects)
+            tasks = np.asarray(tasks)
+            ids = np.asarray(ids)
+            datas = np.asarray([
+                trial_data.to_numpy().T for trial_data in datas
+            ])
+            return ids, subjects, tasks, datas, labels
+        else:
+            return ids, subjects, tasks, datas, labels
 
-        return ids, subjects, tasks, datas, labels
+#------ Example usage -------#
+# loader = Loader()
 
 
-loader = Loader()
+# train_trials = loader.get_trials_from_df(loader.train_df,task_type="MI")
+# test_trials = loader.get_trials_from_df(loader.test_df,task_type="MI")
+# validation_trials = loader.get_trials_from_df(loader.validation_df,task_type="MI")
 
 
-train_trials = loader.get_trials_from_df(loader.train_df)
-test_trials = loader.get_trials_from_df(loader.test_df)
-validation_trials = loader.get_trials_from_df(loader.validation_df)
-
-
-ids, sub, tasks, datas, labels = loader.load_data_parallel(train_trials)
+# ids, sub, tasks, datas, labels = loader.load_data_parallel(train_trials)
