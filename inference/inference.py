@@ -485,10 +485,14 @@ probs_list =  [
 ]
 weights = [  1  , 1 ]
 
-final_mi_predictions = RankAveragingEnsemble(
-    prob_list=probs_list,
-    weights=weights
-)
+# final_mi_predictions = RankAveragingEnsemble(
+#     prob_list=probs_list,
+#     weights=weights
+# )
+
+
+print(preds_mi_one.shape , preds_mi_two.shape)
+final_mi_predictions = np.argmax((preds_mi_one+preds_mi_two)/2 , axis = 1)
 
 
 preds_mi_csv = pd.DataFrame({

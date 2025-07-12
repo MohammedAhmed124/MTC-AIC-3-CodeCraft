@@ -382,7 +382,7 @@ model_former = MTCFormer(depth=2,
 
 optimizer = Adam(model_former.parameters(), lr=0.002)
 criterion = CrossEntropyLoss(reduction="none")
-scheduler = MultiStepLR(optimizer, milestones=[70], gamma=0.1)
+scheduler = MultiStepLR(optimizer, milestones=[60], gamma=0.1)
 
 
 

@@ -570,7 +570,8 @@ class MTCFormer(nn.Module):
 
         for m in self.modules():
             if isinstance(m, (nn.Conv1d, nn.Linear)):
-                nn.init.normal_(m.weight, mean=weight_init_mean, std=weight_init_std)
+                # nn.init.normal_(m.weight, mean=weight_init_mean, std=weight_init_std)
+                nn.init.xavier_normal_(m.weight)
 
 
     def forward(self, x,domain_lambda):
