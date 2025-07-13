@@ -310,6 +310,7 @@ preds_mi_one = predict(
     )
 
 
+print(preds_mi_one)
 
 
 
@@ -443,7 +444,7 @@ preds_mi_two = predict(
     probability=True
     )
 
-
+print(preds_mi_two)
 
 # -----------------------------------------------------------------------------
 #  Final Step – Rank Averaging Ensemble for MI Predictions
