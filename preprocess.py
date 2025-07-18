@@ -64,10 +64,28 @@ class SignalPreprocessor:
         num_windows = (input_size - size) // stride + 1
 
         labels = labels.repeat(num_windows)
-        
+
         subject_ids = subject_ids.repeat(num_windows)
-        
+
         return data_torch, labels, subject_ids
+
+    def normalization(self, data, ignored_ch, eps=1e-10, axis=2):
+        if ignored_ch is not None:
+            if isinstance(ignored_ch, int):
+                ignored_ch = [ignored_ch]
+
+            original_ignored = data[:, ignored_ch, :].copy()
+
+        normalized = (
+            data
+            - data.mean(axis=axis, keepdims=True) / data.std(axis=axis, keepdims=True)
+            + eps
+        )
+
+        if ignored_ch is not None:
+            normalized[:, ignored_ch, :] = original_ignored
+
+        return normalized
 
     def apply_filter(
         self, data: Union[np.ndarray, List[np.ndarray]], filter_type: str = "bandpass"
@@ -87,7 +105,12 @@ class SignalPreprocessor:
             if len(data) == 1:
                 return np.array(signal.filtfilt(b, a, data))
             else:
-                return np.stack([np.array(signal.filtfilt(b, a, signal_data)) for signal_data in data])
+                return np.stack(
+                    [
+                        np.array(signal.filtfilt(b, a, signal_data))
+                        for signal_data in data
+                    ]
+                )
 
         except Exception as e:
             logger.error(f"Filter application failed: {str(e)}")
@@ -100,4 +123,6 @@ new_data = signal_preprocessor.apply_filter(datas, "notch")
 
 new_data = signal_preprocessor.apply_filter(new_data, "bandpass")
 
-new_data, labels, subject_ids = signal_preprocessor.window(new_data, labels, ids, 600, 600)
+new_data = signal_preprocessor.window(new_data, 600, 600)
+
+new_data = signal_preprocessor.normalization(new_data, -1)
