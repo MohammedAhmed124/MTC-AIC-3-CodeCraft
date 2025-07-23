@@ -7,129 +7,164 @@ from sklearn.metrics import f1_score , balanced_accuracy_score
 from .gradient_attack import GradientAttack #Function for gradient attack
 from .rank_ensemble import RankAveragingEnsemble
 import numpy as np
+from torch.utils.data import DataLoader
+import shutil
+from torch.utils.tensorboard import SummaryWriter
+import subprocess
 
-def train_model(model,
-                train_loader=None,
-                val_loader=None,
-                criterion=None,
-                optimizer=None,
-                window_len=None,
-                original_val_labels=None,
-                n_epochs=500,
-                patience=200,
-                device="cuda",
-                save_model_checkpoints=True,
-                save_path = "DeepConvNetMI",
-                scheduler=None,
-                domain_lambda=0.1,
-                lambda_scheduler_fn=None,
-                adversarial_training=True,
-                adversarial_steps =10,
-                adversarial_epsilon=0.1,
-                adversarial_alpha = 0.01,
-                adversarial_factor=0.5,
-                n_classes=None,
-                save_best_only=False,
-                ):
+def update_dataloader(dataset, new_batch_size, shuffle=True):
+    return DataLoader(dataset, batch_size=new_batch_size, shuffle=shuffle)
+
+def train_model(
+        model,
+        train_loader=None,
+        val_loader=None,
+        criterion=None,
+        optimizer_class=None,
+        optimizer_config=None,
+        scheduler_class=None,
+        scheduler_config=None,
+        window_len=None,
+        original_val_labels=None,
+        n_epochs=500,
+        patience=200,
+        device="cuda",
+        save_model_checkpoints=True,
+        save_path="DeepConvNetMI",
+        domain_lambda=0.1,
+        lambda_scheduler_fn=None,
+        scheduler_fn=None,
+        adversarial_training=True,
+        adversarial_steps=10,
+        adversarial_epsilon=0.1,
+        adversarial_alpha=0.01,
+        adversarial_factor=0.5,
+        update_loader=None,
+        n_classes=None,
+        save_best_only=False,
+        tensorboard = False,
+        ):
     
     """
-    The function Trains a neural network model with optional Domain-Adversarial training and adversarial robustness.
+    Trains a deep EEG model with optional domain adaptation and adversarial training.
 
-    This function is designed for EEG-based classification models trained on windowed input sequences. It supports:
-    - Domain-Adversarial Neural Networks (DANN) training through a domain classifier branch.
-    - Gradient-based adversarial training for robustness.
-    - Various scheduler types (e.g., for learning rate or domain λ).
-    - Per-window training and per-trial validation aggregation.
-    - Early stopping and checkpointing based on validation balanced accuracy.
-
-    Parameters
+    Parameters:
     ----------
     model : torch.nn.Module
-        The model to train. It should return two outputs: (label_predictions, domain_predictions).
-    
-    train_loader : DataLoader
-        DataLoader yielding batches of windowed training samples. Each batch should be in the form:
-        (X, sample_weights, labels, subject_labels).
+        Your EEG classification model. Should return (class_logits, domain_logits).
 
-    val_loader : DataLoader
-        DataLoader for validation, with the same format as train_loader.
-    
+    train_loader : DataLoader, optional
+        DataLoader for training data. Each batch should return (X, weights, labels, domain_labels).
+        If None, training will not proceed.
+
+    val_loader : DataLoader, optional
+        DataLoader for validation data. Same format as train_loader but used for validation only.
+
     criterion : torch.nn loss function
-        Loss function to apply to classification and domain predictions.
+        Loss function used for both label and domain predictions.
 
-    optimizer : torch.optim.Optimizer
-        The optimizer to use during training (e.g., Adam, SGD).
+    optimizer_class : torch.optim class
+        e.g. `torch.optim.Adam`. Used to initialize the optimizer.
+
+    optimizer_config : dict
+        Keyword arguments passed to the optimizer (e.g., learning rate, weight decay).
+
+    scheduler_class : torch.optim.lr_scheduler class, optional
+        e.g. `torch.optim.lr_scheduler.ReduceLROnPlateau`. If provided, will be used to adjust learning rate.
+
+    scheduler_config : dict, optional
+        Config passed to the LR scheduler class.
 
     window_len : int
-        Number of windows per original EEG trial. Used to aggregate per-window predictions into trial-level predictions.
+        Number of windows per original trial. Used for validation aggregation.
 
     original_val_labels : torch.Tensor
-        Tensor of original trial-level ground truth labels (used to evaluate validation performance).
+        Labels corresponding to the original, unwindowed validation trials.
 
-    n_epochs : int, optional
-        Number of epochs to train (default is 500).
+    n_epochs : int
+        Maximum number of epochs to train. Default is 500.
 
-    patience : int, optional
-        Early stopping patience (default is 200). Training stops if no improvement for `patience` consecutive epochs.
+    patience : int
+        How many epochs to wait for improvement before early stopping.
 
-    device : str, optional
-        Device to train on, either "cuda" or "cpu" (default is "cuda").
+    device : str or torch.device
+        Device to use: e.g., 'cuda' or 'cpu'.
 
-    save_model_checkpoints : bool, optional
-        Whether to save model checkpoints after every epoch (default is True).
+    save_model_checkpoints : bool
+        If True, saves checkpoints during training.
 
-    save_path : str, optional
-        Directory path to store model checkpoints (default is "DeepConvNetMI").
+    save_path : str
+        Directory path to store saved models and logs.
 
-    scheduler : torch.optim.lr_scheduler._LRScheduler or ReduceLROnPlateau, optional
-        Learning rate scheduler. If ReduceLROnPlateau, it steps based on validation accuracy.
-
-    domain_lambda : float, optional
-        Initial lambda value for DANN domain loss. If set to 0.0, DANN is deactivated.
+    domain_lambda : float
+        Initial weight for the domain loss (for domain adaptation).
 
     lambda_scheduler_fn : callable, optional
-        A function taking (initial_lambda, current_epoch) and returning a new lambda. Used to adjust domain_lambda over time.
+        Function to dynamically update `domain_lambda` each epoch. Signature: lambda old_lambda, epoch → new_lambda.
 
-    adversarial_training : bool, optional
-        If True, adversarial examples are generated using gradient attacks to improve model robustness (default is True).
+    scheduler_fn : callable, optional
+        Custom function to update adversarial parameters dynamically.
+        Should return updated values for (domain_lambda, adversarial_training, adversarial_steps, adversarial_epsilon, adversarial_alpha, adversarial_factor).
 
-    adversarial_steps : int, optional
-        Number of gradient steps in adversarial attack (default is 10).
+    adversarial_training : bool
+        If True, enables FGSM/PGD-like adversarial training during model optimization.
 
-    adversarial_epsilon : float, optional
-        Maximum L∞ perturbation allowed in adversarial attack (default is 0.1).
+    adversarial_steps : int
+        Number of steps for gradient attack (if enabled). More steps → stronger adversarial examples.
 
-    adversarial_alpha : float, optional
-        Step size per iteration in adversarial attack (default is 0.01).
+    adversarial_epsilon : float
+        Maximum perturbation allowed for adversarial attack.
 
-    adversarial_factor : float, optional
-        Weight of adversarial loss in the total training loss (default is 0.5).
+    adversarial_alpha : float
+        Step size for iterative adversarial attack (PGD-style).
 
-    n_classes : int, optional
-        Number of classes in the classification task .
+    adversarial_factor : float
+        Weighting factor for adversarial loss in total loss computation.
 
-    Returns
+    update_loader : tuple (epoch_index, new_batch_size), optional
+        If specified, updates the training loader to a new batch size after `epoch_index`.
+
+    n_classes : int
+        Number of output classes. Required for initializing validation tensors.
+
+    save_best_only : bool
+        If True, only saves the checkpoint with the best validation performance (based on F1 + balanced accuracy).
+
+    tensorboard : bool
+        If True, initializes TensorBoard logging for losses, metrics, and layer introspection.
+
+    Returns:
     -------
-    None
-        Trains the model in-place and saves the best model (based on validation balanced accuracy) as a state_dict checkpoint.
-
-    Notes
-    -----
-    -  DANN Activation: The domain classifier is only trained if `domain_lambda > 0`. If it's set to 0, the domain loss has no effect.
-    -  Adversarial Training: When `adversarial_training=True`, adversarial samples are created using PGD-style attack (multi-step FGSM).
-    -  Validation Aggregation: During validation, predictions for each window in a trial are soft-averaged using `weights_val_batch`.
-       These weights are derived from the "Validation" EEG channel helps weigh windows with more reliable measurements. where more corrupted windows correspond to less weights.
-    -  Schedulers:
-        - Standard schedulers are stepped every epoch.
-        - If using `ReduceLROnPlateau`, it's stepped based on validation balanced accuracy.
-        - Custom lambda scheduler (`lambda_scheduler_fn`) dynamically adjusts domain loss weight.
-
+    float
+        Best validation metric (average of F1 and balanced accuracy) seen during training.
     """
+
+    print(f"Total Parameters of the Model ======> {sum(p.numel() for p in model.parameters()):,} paramaters")
+    if tensorboard:
+        log_dir = os.path.join(save_path, "logs")
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+        writer = SummaryWriter(log_dir=log_dir)
+
+        command = [
+            "tensorboard",
+            "--logdir", log_dir,
+            "--port", str(6006),
+            "--reload_interval", "1"
+        ]
+
+        tensorboard_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        print(f"Launching TensorBoard at http://localhost:{6006}/ ...")
+    
+
+    if update_loader:
+        update_epoch , batch_size = update_loader
     if isinstance(device,str):
         device = torch.device(device)
-    
-    if os.path.isdir(save_path):
-        print("Path Exists. Contents of this folder will be modified save_path is : ",save_path)
+    if save_path:
+        if os.path.isdir(save_path):
+            print("Path Exists. Contents of this folder will be modified save_path is : ",save_path)
     else:
         print("Making a new directory at : ", save_path , " Checkpoints will be saved there. ")
         os.makedirs(save_path, exist_ok=True) 
@@ -140,6 +175,13 @@ def train_model(model,
     best_epoch = -1 # To track the epoch of the best model
         # --- 4. Training Loop ---
     print("--- Starting Training Loop ---")
+
+    optimizer = optimizer_class(model.parameters(), **optimizer_config)
+
+
+    scheduler = None
+    if scheduler_class is not None and scheduler_config is not None:
+        scheduler = scheduler_class(optimizer, **scheduler_config)
     for epoch in range(n_epochs):
         model.train() # Set model to training mode
         epoch_loss = 0.0
@@ -152,6 +194,15 @@ def train_model(model,
         #     scheduler.step() # Step the scheduler after optimizer.step() if you want per-epoch updates
         if lambda_scheduler_fn:
                 domain_lambda_ = lambda_scheduler_fn(domain_lambda , epoch)
+
+        if epoch==update_epoch:
+            train_loader = update_dataloader(train_loader.dataset,new_batch_size=batch_size)
+
+
+        if scheduler_fn:
+            domain_lambda, adversarial_training, adversarial_steps, adversarial_epsilon, adversarial_alpha, adversarial_factor = scheduler_fn(
+                epoch + 1
+            )
 
         for batch_x, weights_batch, batch_y,subject_label in train_loader:
             batch_x = batch_x.to(device, dtype=torch.float32)
@@ -251,6 +302,44 @@ def train_model(model,
         val_f1 = f1_score(val_targets, val_preds, average='weighted')
         val_bal_acc = balanced_accuracy_score(val_targets, val_preds)
 
+        early_stopping_criteria = (val_f1+val_bal_acc)/2
+
+
+        if tensorboard:
+            writer.add_scalar("Loss/train", avg_train_loss, epoch + 1)
+            writer.add_scalar("Loss/val", avg_val_loss, epoch + 1)
+            writer.add_scalar("F1/train", train_f1, epoch + 1)
+            writer.add_scalar("F1/train_adv", train_adv_f1, epoch + 1)
+            writer.add_scalar("F1/val", val_f1, epoch + 1)
+            writer.add_scalar("BalancedAccuracy/val", val_bal_acc, epoch + 1)
+            writer.add_scalar("Lambda/domain", domain_lambda, epoch + 1)
+            writer.add_scalar("Lambda/domain_loss", domain_lambda, epoch + 1)
+            writer.add_scalar("Adversarial/steps", adversarial_steps, epoch + 1)
+            writer.add_scalar("Adversarial/epsilon", adversarial_epsilon, epoch + 1)
+            writer.add_scalar("Adversarial/alpha", adversarial_alpha, epoch + 1)
+            writer.add_scalar("Adversarial/factor", adversarial_factor, epoch + 1)
+
+            depth = 0
+            scale = 100
+
+            for name, module in model.named_modules():
+                if hasattr(module, 'last_gates'):
+                    depth += 1
+                    for branch_idx, gate in enumerate(module.last_gates):
+                        # gate: [B, C, 1]
+                        gate_curve = gate[0, :, 0].detach().cpu()  # [C]
+
+                        C = gate_curve.size(0)
+                        counts = (gate_curve * scale).round().long().clamp(min=1)  # [C]
+                        channel_idxs = torch.arange(C).repeat_interleave(counts)   # [sum(counts)]
+
+                        writer.add_histogram(
+                            f"Gates/Branch{branch_idx+1}_Depth{depth}_ChBiasHist",
+                            channel_idxs.numpy(),
+                            global_step=epoch,
+                            bins=C
+                        )
+
         # --- 6. Checkpointing and Early Stopping ---
         # Save checkpoint every epoch for robust recovery, or modify to save less frequently
 
@@ -262,11 +351,23 @@ def train_model(model,
             else:
                 scheduler.step()
 
-
-        if save_model_checkpoints:
-            if save_best_only:
-                if val_bal_acc > best_val_metric:
-                    save_path_for_best_version = os.path.join(save_path, "best_model_.pth")
+        if save_path:
+            if save_model_checkpoints:
+                if save_best_only:
+                    if early_stopping_criteria > best_val_metric:
+                        save_path_for_best_version = os.path.join(save_path, "best_model_.pth")
+                        torch.save(
+                            {
+                                "epoch": epoch + 1,
+                                "model_state_dict": model.state_dict(),
+                                "optimizer_state_dict": optimizer.state_dict(),
+                                "val_f1": val_f1,
+                                "val_bal_acc": val_bal_acc
+                            },
+                            save_path_for_best_version
+                        )
+                        print("✅ Best checkpoint updated (save_best_only=True). at ",save_path)
+                else:
                     torch.save(
                         {
                             "epoch": epoch + 1,
@@ -275,25 +376,13 @@ def train_model(model,
                             "val_f1": val_f1,
                             "val_bal_acc": val_bal_acc
                         },
-                        save_path_for_best_version
+                        os.path.join(save_path, f"checkpoint_epoch_{epoch+1:03d}.pth")
                     )
-                    print("✅ Best checkpoint updated (save_best_only=True). at ",save_path)
-            else:
-                torch.save(
-                    {
-                        "epoch": epoch + 1,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "val_f1": val_f1,
-                        "val_bal_acc": val_bal_acc
-                    },
-                    os.path.join(save_path, f"checkpoint_epoch_{epoch+1:03d}.pth")
-                )
-                print(f"🟢 Checkpoint saved for epoch {epoch+1}")
+                    print(f"🟢 Checkpoint saved for epoch {epoch+1}")
 
         # Early stopping logic: Use val_bal_acc as the primary metric
-        if val_bal_acc > best_val_metric:
-            best_val_metric = val_bal_acc
+        if early_stopping_criteria > best_val_metric:
+            best_val_metric = early_stopping_criteria
             epochs_without_improvement = 0
             best_model_state = model.state_dict()
             best_epoch = epoch + 1
@@ -313,142 +402,64 @@ def train_model(model,
             f"Time: {time.time() - start_time:.1f}s | "
             f"Balanced Accuracy Val: {val_bal_acc:.4f} | - "
             f"Domain Loss: {domain_loss:.4f}")
-
+        if epoch==100 and best_val_metric<0.5:
+            print("---BREAKING TRAINING----")
+            return best_val_metric
     # --- 8. Final Actions After Training ---
     print("\n--- Training Finished ---")
     if best_model_state:
         print(f"Best validation Balanced Accuracy: {best_val_metric:.4f} achieved at Epoch {best_epoch}")
-    return best_epoch
+    writer.close()
+    return best_val_metric
 
 
+    
 
+import torch.nn.functional as F
 
-
-
-
-
-
-device = torch.device("cuda")
-
-def predict(
+def predict_optimized(
         model,
-        window_len=None,
+        windows_per_trial=None,
         loader=None,
-        num_samples_to_predict=None,
-        num_classes=2,
         probability=False,
         device="cpu",
         ):
     
 
     """
-    The function Performs prediction on EEG data using a sliding-window-based model architecture.
-    
-    This function is designed to be used with a custom EEGDataset (passed via a DataLoader),
-    which already has preprocessed the EEG signals into temporal windows and provides:
-    - `data`     : Tensor of shape (num_windows, channels, time)
-    - `labels`   : Tensor of shape (num_windows,) — used only for consistency, not during inference
-    - `weights`  : Tensor of shape (num_windows,) — soft importance values per window,
-                  derived from the "Validation" EEG channel signal for use in aggregation
+    A lightweight prediction function that turns window-level EEG inputs into trial-level outputs.
 
-    The model outputs logits for each window, which are then grouped per trial (based on `window_len`)
-    and ----softly averaged---- using the corresponding `weights`. This returns one prediction per original EEG trial.
+    It's meant for fast inference — for example, during test-time when everything's already preloaded. 
+    You pass in a model and a loader (or a direct tuple of windows and weights), and it handles 
+    the rest: moves data to the correct device, runs the model, and averages predictions across all windows 
+    for each trial (if windows_per_trial is set).
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Trained PyTorch model. Its forward method must return:
-        - Class logits of shape [batch_size, num_classes]
-        - Domain logits (ignored during prediction)
+    Args:
+        model (torch.nn.Module): The trained model you want to use for prediction. Should support forward(x, place_holder_float).
+        windows_per_trial (int, optional): How many windows make up one trial (for averaging predictions). 
+        loader (DataLoader or Tuple): A PyTorch DataLoader or a tuple like (x, weights). Can be used for test data.
+        probability (bool): If True, returns softmax probabilities. If False, returns hard class labels.
+        device (str): The device to run the model on. "cpu" or "cuda".
 
-    window_len : int
-        Length of a single window. Used to regroup flat predictions into per-trial decisions.
-
-    loader : torch.utils.data.DataLoader
-        DataLoader containing a dataset of type `EEGDataset`, which must expose the attributes:
-        - `.data`, `.labels`, and `.weights`
-
-    num_samples_to_predict : int
-        Number of original EEG trials to predict. Used to preallocate output tensors.
-
-    num_classes : int
-        Number of classification classes (e.g., 2 for binary classification).
-
-    probability : bool
-        If True, returns softmax probabilities for each class; otherwise, returns discrete predictions.
-
-    device : str
-        Device for model inference ("cpu" or "cuda").
-
-    Returns
-    -------
-    np.ndarray
-        - If `probability=False`: array of shape (num_trials,) containing class predictions.
-        - If `probability=True`: array of shape (num_trials, num_classes) with softmax probabilities.
-
-    Notes
-    -----
-    Soft Averaging Strategy:
-    ------------------------
-    For each original trial, predictions from its `window counts` windows are softly averaged
-    using the weights from the dataset's `Validation` channel. This reflects the confidence or quality
-    of each window's data segment.
-
-    The trial-level logits are computed as:
-
-        logits_trial = sum(w_i * logits_i) / sum(w_i)
-
-    where w_i is the validation-based weight for window i.
-
-    Fallback Behavior:
-    ------------------
-    If all weights for a trial are close to zero (e.g., due to noisy validation signal),
-    the function falls back to a **simple mean** of the window logits to avoid division by zero.
-
-    Assumptions:
-    ------------
-    - The windows are arranged **sequentially per trial**, and `window_len` is consistent for all trials.
-    - Domain predictions are not used during inference, so `domain_lambda` is set to 0 in the forward pass.
+    Returns:
+        np.ndarray: Predicted labels or class probabilities for each trial (or window if windows_per_trial=None).
     """
-    if isinstance(device,str):
-        device = torch.device(device)
-
+    
     model.eval()
-    preds = []
-    probs=[]
     with torch.no_grad():
 
-
-        x = loader.dataset.data.detach().clone().to(device, dtype=torch.float32)
-        y = loader.dataset.labels.detach().clone().to(device, dtype=torch.long) 
-        weights = loader.dataset.weigths.detach().clone().to(device, dtype=torch.float32)
+        if isinstance(loader , torch.utils.data.DataLoader):
+            x = loader.dataset.data.detach().clone().to(device, dtype=torch.float32)
+            weights = loader.dataset.weigths.detach().clone().to(device, dtype=torch.float32)
+        else:
+            x , weights = loader
         outputs , _ = model(x,0)
+        weighted_outputs = (outputs * weights.unsqueeze(1)).T.unsqueeze(0)  ##[n_windows , n_classes] ===> [1 , n_classes , n_windows]##
 
+        trial_level_preds =F.avg_pool1d(weighted_outputs, kernel_size=windows_per_trial, stride=windows_per_trial)
+        trial_level_preds = trial_level_preds.squeeze(0).T
 
+        probs = torch.softmax(trial_level_preds, dim=1)
+        preds = torch.argmax(probs, dim=1)
 
-        aggregated_outputs = torch.zeros((num_samples_to_predict, num_classes), device=device, dtype=torch.float32)
-
-        k = 0 # Counter for original trials
-        for i in range(0, outputs.shape[0], int(window_len)):
-            logits = outputs[i : i + int(window_len)] 
-            w_cur = weights[i : i + int(window_len)].unsqueeze(1) # [WINDOW_LEN, 1]
-
-            # Re-enable weighted aggregation for validation!
-            denom = w_cur.sum()
-            if denom > 1e-8: # Add small epsilon to avoid division by zero
-                aggregated_outputs[k] = (logits * w_cur).sum(dim=0) / denom
-            else:
-                # Fallback if weights are all zero for a trial's windows
-                aggregated_outputs[k] = logits.mean(dim=0) # Use unweighted mean as fallback
-            
-            k += 1
-
-
-
-        cpu_aggregated_outputs = aggregated_outputs.to("cpu")
-        preds = torch.argmax(cpu_aggregated_outputs,axis = 1)
-
-    if probability:
-        return torch.softmax(cpu_aggregated_outputs, dim=1).numpy()
-    else:
-        return np.asarray(preds).reshape(-1,)
+    return (probs.cpu().numpy() if probability else preds.cpu().numpy())

@@ -1,379 +1,369 @@
+
+import numpy as np
+from typing import Union, List , Tuple , Optional
 import logging
-from joblib import delayed, Parallel
-from copy import deepcopy
-import mne 
-from tqdm import tqdm
-import numpy as np 
+import mne
+import torch 
 
+logger = logging.getLogger(__name__)
 
-
-def window(mne_file, size = 250, stride = 125):
-
+class SignalPreprocessor:
+    def __init__(
+            self,
+            fs: int = 250,
+            bandpass_low: float = 6.0,
+            bandpass_high: float = 30.0,
+            n_cols_to_filter: int = 4,
+            window_size : int = 600,
+            window_stride : int = 600,
+            idx_to_ignore_normalization : int =-1,
+            crop_range : Optional[Tuple[float , float]] = None,
+            ):
         """
-    Slice a continuous MNE Raw object into overlapping time windows.
-
-    This function takes an MNE Raw object (containing EEG)
-    and applies a sliding window over the time axis to extract multiple short, fixed-length
-    time segments (windows) from the original recording. Each window is then wrapped again
-    as a new MNE Raw object with the same channel information.
+    A utility class for EEG preprocessing — handles filtering, normalization, cropping, and windowing of EEG data
+    before feeding it to a model. Meant to clean and prepare signals from raw trials into well-shaped inputs for training.
 
     Parameters
     ----------
-    mne_file : mne.io.Raw
-        The input continuous MNE Raw object (e.g., EEG recording) to be windowed.
+    fs : int
+        Sampling frequency of the EEG signals, in Hz. Defaults to 250 Hz.
     
-    size : int, optional (default=250)
-        The number of time points (samples) in each window.
-        For example, with a sampling rate of 250 Hz, a window size of 250 corresponds to 1 second.
-
-    stride : int, optional (default=125)
-        The number of time points to shift the window by for each step (controls overlap).
-        For example, with a stride of 125 and size of 250, the windows will have 50% overlap.
-
-    Returns
-    -------
-    result_windows : List[mne.io.Raw]
-        A list of new MNE Raw objects, each containing a snapshot (window) of the original signal.
-        These windows can be used as inputs for machine learning or signal processing pipelines.
-
-    Notes
-    -----
-    - If a window exceeds the original signal length (i + size > n_times), it is skipped.
-    - All windows preserve the original channel names and types.
+    bandpass_low : float
+        The low cutoff frequency for the bandpass filter. EEG activity below this (like drift) will be removed.
     
-
-    Reason of use:
-    -----
-    - Primarily to increase the number of training examples.
-
-    Example
-    -------
-    >>> raw = mne.io.read_raw_fif("subject01_raw.fif", preload=True)
-    >>> windows = window(raw, size=500, stride=250)
-    >>> print(len(windows))  # Number of time windows
-    >>> print(windows[0].get_data().shape)  # (n_channels, window_size)
+    bandpass_high : float
+        The high cutoff frequency for the bandpass filter. Anything above this (like muscle artifacts) gets filtered out.
+    
+    n_cols_to_filter : int
+        Number of the first channels (e.g., EEG electrodes) to apply bandpass filtering to. Often, only EEG channels are filtered, not auxiliary sensors.
+    
+    window_size : int
+        Number of time points per window. This slices each trial into overlapping or non-overlapping segments.
+    
+    window_stride : int
+        Number of time points to step forward when creating the next window. If equal to window_size, windows don’t overlap.
+    
+    idx_to_ignore_normalization : int
+        Index of a channel (like a quality/validation signal) to skip during z-scoring. Often used to preserve labels or non-EEG signals.
+    
+    crop_range : tuple(float, float), optional
+        Time in seconds to crop the signal (start_time, end_time). Used to ignore irrelevant portions of the signal like pre-trial pauses.
     """
+        self.fs = fs
+        self.bandpass_low = bandpass_low
+        self.bandpass_high = bandpass_high
+        self.n_cols_to_filter = n_cols_to_filter
+        self.window_size = window_size
+        self.window_stride = window_stride
+        self.idx_to_ignore_normalization = idx_to_ignore_normalization
+        self.crop_range = crop_range
+
+        if not isinstance(fs, int) or fs <= 0:
+            raise ValueError("Sampling frequency 'fs' must be a positive integer.")
+
+
+        if not isinstance(bandpass_low, (float, int)) or bandpass_low <= 0:
+            raise ValueError("bandpass_low must be a positive number.")
+        if not isinstance(bandpass_high, (float, int)) or bandpass_high <= 0:
+            raise ValueError("bandpass_high must be a positive number.")
+        if bandpass_low >= bandpass_high:
+            raise ValueError("bandpass_low must be less than bandpass_high.")
+
+        if not isinstance(n_cols_to_filter, int) or n_cols_to_filter <= 0:
+            raise ValueError("n_cols_to_filter must be a positive integer.")
+
+        if not isinstance(window_size, int) or window_size <= 0:
+            raise ValueError("window_size must be a positive integer.")
+
+        if not isinstance(window_stride, int) or window_stride <= 0:
+            raise ValueError("window_stride must be a positive integer.")
+
+        if not isinstance(idx_to_ignore_normalization, int):
+            raise ValueError("idx_to_ignore_normalization must be an integer.")
+
+        if crop_range is not None:
+            if (
+                not isinstance(crop_range, tuple)
+                or len(crop_range) != 2
+                or not all(isinstance(x, (float, int)) for x in crop_range)
+                or crop_range[0] < 0
+                or crop_range[1] <= crop_range[0]
+            ):
+                raise ValueError(
+                    "crop_range must be a tuple of two numbers (start_sec, end_sec), with 0 <= start < end."
+                )
+
+        logger.info(
+            f"Initialized SignalPreprocessor with configuration:\n"
+            f"  • Sampling frequency (fs): {self.fs} Hz\n"
+            f"  • Bandpass filter: low={self.bandpass_low} Hz, high={self.bandpass_high} Hz\n"
+            f"  • Number of filtered channels: {self.n_cols_to_filter}\n"
+            f"  • Windowing: size={self.window_size}, stride={self.window_stride}\n"
+            f"  • Channel index to ignore in normalization: {self.idx_to_ignore_normalization}\n"
+            f"  • Crop range (in seconds): {self.crop_range if self.crop_range else 'None'}"
+        )
+
+    def _window_data(
+            self,
+            data,
+            labels,
+            subject_ids,
+            window_size,
+            window_stride,
+    )-> np.ndarray: 
         
-        data = mne_file.get_data()
-        ch_names = mne_file.ch_names
-        ch_types = mne_file.get_channel_types()
-        n_channels , n_times = data.shape
-        result_windows = []
-        info = mne.create_info(ch_names=ch_names , ch_types=ch_types,sfreq=mne_file.info["sfreq"])
-        for i in range(0 ,n_times,stride):
-            if i+size>=n_times:
-                break
-            window = data[:,i:i+size]
-            window_mne = mne.io.RawArray(window,info=info)
-            result_windows.append(window_mne)
-        return result_windows
-
-
-
-def z_score_normalize(arr,channel_idx_to_ignore=None):
-    """
-        Apply z-score normalization to EEG data along the time axis (last axis),
-    optionally skipping specific channel indices (e.g., binary channels like 'Validation').
-
-    This function performs per-channel normalization across time for multichannel EEG data.
-    It standardizes each signal to zero mean and unit variance using the z-score formula:
-
-        z = (x - μ) / (σ + ε)
-
-    where:
-    - x is the signal (for a specific channel),
-    - μ is the mean over time,
-    - σ is the standard deviation over time,
-    - ε is a small constant to avoid division by zero.
+        """
+    Efficiently slices each EEG trial into overlapping windows using a vectorized PyTorch operation.
 
     Parameters
     ----------
-    arr : np.ndarray
-        A NumPy array of shape `(n_channels, n_times)` representing EEG signal data.
-    
-    channel_idx_to_ignore : int or list of int, optional (default=None)
-        Index (or indices) of channel(s) to exclude from normalization.
-        Commonly used to exclude non-continuous or categorical channels like 'Validation',
-        which is provided as binary (0/1) and should not be scaled as it distorts its meaning.
-
-    Returns
-    -------
-    normalized_arr : np.ndarray
-        The z-score normalized EEG data. If `channel_idx_to_ignore` is provided,
-        those channels retain their original values.
-
-    Notes
-    -----
-    - Normalization is done across the time axis (last axis), i.e., per channel.
-    - A very small epsilon (1e-10) is added to the denominator to ensure numerical stability.
-    - Skipping normalization for binary channels (e.g., event markers) prevents the loss of their semantic value.
-
-    Example
-    -------
-    >>> eeg_data.shape  # (8 channels, 3000 time points)
-    (8, 3000)
-    >>> z_normalized = z_score_normalize(eeg_data, channel_idx_to_ignore=7)
-    >>> z_normalized.shape
-    (8, 3000)
-    >>> np.allclose(z_normalized[0].mean(), 0, atol=1e-3)  # normalized
-    True
-    >>> np.array_equal(z_normalized[7], eeg_data[7])  # not normalized because we chose it as an index to ignore
-    True
-
-    
-    """
-
-
-    up = arr-arr.mean(axis = -1 , keepdims = True)
-    down = arr.std(axis = -1 , keepdims=True)+1e-10
-    normalized_arr = up/down
-    if not channel_idx_to_ignore:
-        return normalized_arr
-    else:
-        normalized_arr[channel_idx_to_ignore,:] = arr[channel_idx_to_ignore,:]
-        return normalized_arr
-
-
-
-def preprocess_one_file(
-        mne_file,
-        label,
-        subject_label,
-        cols_to_pick=None,
-        l_freq=6,
-        h_freq=30,
-        notch_freqs=[50,100],
-        notch_width = 1.0,
-        window_size=600,
-        window_stride=25
-        ):
-    
-    """
-    Preprocess a single EEG recording (`mne_file`) by applying a sequence of filtering,
-    channel selection, windowing, and normalization operations.
-
-    This function is designed to be used within a parallel processing setup where
-    multiple files are preprocessed simultaneously. It performs the following steps:
-
-    1. **Suppress Logging**: Reduces verbosity from `joblib` and `mne` for cleaner outputs.
-    2. **Deep Copy**: Copies the input MNE Raw object to avoid modifying it in place.
-    3. **Notch Filtering**: Removes power-line artifacts (e.g., 50Hz and harmonics).
-    4. **Bandpass Filtering**: Isolates the frequency range of interest (default: 6–30 Hz for MI).
-    5. **Channel Selection**: Picks only relevant EEG/auxiliary channels (e.g., 'C3', 'gyro_norm', etc.).
-    6. **Windowing**: Slices the continuous signal into overlapping fixed-length segments (sliding windows).
-    7. **Normalization**: Applies z-score normalization per window, with optional exclusion
-       of binary or non-continuous channels (e.g., 'Validation').
-
-    Parameters
-    ----------
-    mne_file : mne.io.Raw
-        Raw EEG signal loaded using the MNE library.
-    
-    label : Any
-        The class label corresponding to the entire file (e.g., motor imagery class or SSVEP class).
-    
-    subject_label : Any
-        The subject ID or identifier for the person whose EEG was recorded. (for later adversarial training)
-    
-    cols_to_pick : list of str, optional
-        Channel names to keep from the EEG signal. Must include the 'Validation' channel
-        if it's used for weighting later.
-    
-    l_freq : float, default=6
-        Low cutoff frequency for bandpass filtering.
-    
-    h_freq : float, default=30
-        High cutoff frequency for bandpass filtering.
-    
-    notch_freqs : list of float, default=[50, 100]
-        Frequencies at which to apply notch filters to remove line noise.
-    
-    notch_width : float, default=1.0
-        The width of each notch filter.
-    
-    window_size : int, default=600
-        Number of time samples per window.
-    
-    window_stride : int, default=25
-        Step size (in samples) to move the window between successive windows.
-
-    Returns
-    -------
-    windows : list of np.ndarray
-        List of normalized window arrays, each with shape (n_channels, window_size).
-    
-    label_list : list
-        A list of labels (repeated `len(windows)` times), one for each window.
-    
-    subject_label_list : list
-        A list of subject identifiers (repeated `len(windows)` times), one for each window.
-
-    Notes
-    -----
-    - The function uses `z_score_normalize` to normalize each window individually.
-    - The Validation channel, if present, is excluded from normalization to avoid distorting its binary nature.
-     (e.g., values like 0 or 1 which represent event markers).
-    - The output is designed to be aggregated later using a wrapper function such as
-      `preprocess_data()` which runs this function in parallel for many files.
-
-    """
-        
-
-    logging.getLogger('joblib').setLevel(logging.ERROR)
-    mne.set_log_level('ERROR')
-    mne_file = deepcopy(mne_file)
-
-
-
-    mne_file.notch_filter(freqs=notch_freqs, verbose=False, notch_widths=notch_width,
-                          filter_length="auto",
-                          picks='eeg',)
-
-    mne_file.filter(l_freq=l_freq, h_freq=h_freq)
-    
-    try:
-        validation_idx = cols_to_pick.index("Validation")
-    except:
-        validation_idx = None
-
-
-    mne_file.pick_channels(cols_to_pick)
-    windows = window(mne_file,  size = window_size, stride = window_stride)
-
-    windows = [
-        z_score_normalize(
-            x.get_data(),
-            channel_idx_to_ignore=validation_idx
-            )   for x in windows
-        ]
-    return windows , [label]*len(windows),[subject_label]*len(windows)
-
-
-
-def preprocess_data(
-        train_data_mne,
-        labels,
-        subject_labels,
-        preprocess_func=None,
-        params=None,
-        n_jobs=4
-        ):
-    
-
-    """
-    Preprocess a batch of EEG recordings in parallel and organize the resulting windowed data.
-
-    This function is designed to:
-    1. Run preprocessing in parallel for efficiency using `joblib.Parallel`.
-    2. Aggregate and organize the outputs into clean NumPy arrays.
-    3. Extract per-window weights based on a binary "Validation" channel (takes the mean for each window), used for sample weighting and soft voting later.
-
-    Parameters
-    ----------
-    train_data_mne : list of mne.io.Raw
-        List of EEG recordings (MNE Raw objects).
-
-    labels : list
-        Class label for each file in `train_data_mne`.
-
-    subject_labels : list
-        A subject ID or identifier for each file (parallel to `train_data_mne` and `labels`).
-
-    preprocess_func : callable
-        A function that processes a single MNE file. Expected to return a tuple of:
-        - windowed signal list (list of np.ndarrays),
-        - corresponding labels list,
-        - corresponding subject IDs list.
-        Example: `preprocess_one_file()`.
-
-    params : dict, optional
-        A dictionary of parameters to pass into `preprocess_func`. This includes:
-        - `"cols_to_pick"` (list of str): channel names to keep (must include `"Validation"`).
-        - `"window_size"`, `"window_stride"`, `"l_freq"`, `"h_freq"`, etc.
-
-    n_jobs : int, default=10
-        Number of parallel processes to spawn (should not exceed your CPU core count).
-
-    Returns
-    -------
     data : np.ndarray
-        3D array of shape `(N_windows, N_channels, window_length)` containing the normalized signal windows.
-
-    validation_weights : np.ndarray
-        1D array of length `N_windows`, containing the average value of the 'Validation' channel for each window. (How much of the signal is not corrupted)
-        This will be used later for weighting losses and confidence-aware learning.
+        EEG data of shape (n_trials, n_channels, input_size). Each trial is a full recording window.
 
     labels : np.ndarray
-        Array of window-level labels (same label repeated across all windows of a file).
+        Trial-wise class labels of shape (n_trials,). Each label is repeated for all windows from that trial.
 
-    subject_labels : np.ndarray
-        Array of window-level subject IDs (same subject ID repeated across all windows of a file).
+    subject_ids : np.ndarray
+        Trial-wise subject identifiers of shape (n_trials,). Also repeated for each window.
 
-    WINDOW_LEN : int
-        Number of windows per file (assumes all files produce the same number of windows, taken from the last file).
+    window_size : int
+        Number of time points in each window.
 
-    Raises
-    ------
-    ValueError
-        If the "Validation" channel is not found in `cols_to_pick`, since this channel is required
-        for calculating `validation_weights`.
+    window_stride : int
+        Number of time points to move forward between windows.
+
+    Returns
+    -------
+    windowed_data : np.ndarray
+        A stacked array of shape (n_windows_total, n_channels, window_size), where all windows from all trials are packed together.
+
+    windowed_labels : np.ndarray
+        A 1D array of shape (n_windows_total,) with repeated trial labels for each window.
+
+    windowed_subject_ids : np.ndarray
+        A 1D array of shape (n_windows_total,) with repeated subject IDs for each window.
 
     Notes
     -----
-    - The function uses `tqdm` to show progress through the dataset.
-    - It assumes each file is fully preprocessed independently and it merges the resulting lists.
-    - The final structure is ideal for feeding into the machine learning pipelines (e.g., PyTorch Datasets).
-    - `validation_weights` are especially useful for semi-supervised or domain-adaptive training,
-      where some windows carry more relevance than others.
-
-    Example
-    -------
-    >>> params = {"cols_to_pick": ["C3", "C4", "Validation"], "window_size": 600}
-    >>> data, weights, y, s, win_len = preprocess_data(
-    ...     mne_data_list, labels, subject_ids,
-    ...     preprocess_func=preprocess_one_file, params=params, n_jobs=4
-    ... )
-    >>> data.shape
-    (total_windows, n_channels, 600)
+    This method is fully vectorized using `torch.unfold`, which avoids slow Python loops and makes the windowing process fast and scalable even on large EEG datasets.
     """
+        _ , n_channels , input_size = data.shape
+
+        assert data.shape[0] == labels.shape[0] == subject_ids.shape[0] , "mismatch in input arrays lengths"
+        data_torch =torch.from_numpy(data)
+        data_torch = data_torch.unfold(dimension=2, size=window_size, step=window_stride).permute(0, 2, 1, 3)
+        data_torch = data_torch.reshape(-1 , n_channels , window_size).cpu().numpy()
+
+        self.num_windows_per_trial = (input_size - window_size) // window_stride + 1
+
+        labels = labels.repeat(self.num_windows_per_trial)
+        subject_ids = subject_ids.repeat(self.num_windows_per_trial)
+        return data_torch , labels , subject_ids
+    
+    def _zscore_except_channels(
+            self,
+            data,
+            ignored_ch=None,
+            axis = 2
+            ) -> np.ndarray:
+        
+        """
+    Applies z-score normalization to the EEG signal along the specified axis,
+    excluding some channels (like the validation channel) to avoid distorting
+    binary or categorical information.
+
+    Normalization is applied only to the channels not listed in `ignored_ch`.
+    This is especially useful when one of the channels holds metadata (e.g.,
+    validation masks in our case) to avoid destorting its binary nature.
+
+    Mathematically, it performs:
+        X_norm = (X - mean) / (std + eps)
+    where eps is a small value to avoid division by zero.
+
+    Parameters:
+        data (np.ndarray): Input array of shape (batch, channels, time).
+        ignored_ch (list or int, optional): Channels to exclude from normalization.
+        axis (int): The axis over which to compute mean and std.
+
+    Returns:
+        np.ndarray: Normalized data with the same shape.
+    """
+        batch_size , n_channels , n_time_steps = data.shape
+        if axis is None:
+            raise ValueError("Please provide an axis to the normalization")
+        
+        if isinstance(ignored_ch, int):
+            ignored_ch = [ignored_ch]
+
+        mask = np.ones(n_channels, dtype=bool)
+        if ignored_ch is not None and len(ignored_ch) > 0:
+            mask[ignored_ch] = False
+
+
+
+
+        data = data.copy() 
+        selected = data[:, mask, :] 
+
+        mean = selected.mean(axis=axis, keepdims=True)
+        std = selected.std(axis=axis, keepdims=True)
+        eps = 1e-10
+
+        data[:, mask, :] = (selected - mean) / (std+eps)
+
+        return data
         
 
-    params={} if not params else params
-    results = Parallel(n_jobs=n_jobs, verbose=0)( 
-        delayed(preprocess_func)(mne_file,label,subject_label,**params)
-        for mne_file,label,subject_label in tqdm(zip(train_data_mne,labels,subject_labels))
-    )
+    def _apply_filter(
+            self,
+            data: np.ndarray
+        ) -> np.ndarray:
 
-    try:
-        validation_idx = params['cols_to_pick'].index("Validation")
-    except:
-        raise ValueError("Validation is not available")
+        """
+    Bandpass filters each trial using MNE, working across batched EEG input.
+
+    This function expects a 3D array shaped (trials × channels × time) and applies
+    a bandpass filter using MNE’s `filter_data`. It only filters the first 
+    `self.n_cols_to_filter` channels — so make sure your input channel order 
+    puts the EEG ones first! (i.e., before any extras like validation masks or accelerometers).
+
+    It also handles both lists of trials and pre-stacked arrays smoothly.
+
+    Logs what it's doing, and throws a clear error if the input shape isn’t what it expects.
+
+    Returns:
+        np.ndarray: Filtered EEG data with the same shape as input.
+    """
+        try:
+            is_list = isinstance(data, list)
+            if is_list:
+                data_array = np.stack(data)  # shape: (trials, channels, time)
+            else:
+                data_array = np.copy(data)
+
+            if data_array.ndim != 3:
+                raise ValueError(f"Expected 3D array (trials, channels, time), got shape {data_array.shape}")
+
+            n_trials, n_channels, n_times = data_array.shape
+
+            logger.info(f"Applying bandpass filter: {self.bandpass_low}–{self.bandpass_high} Hz")
+            data_array[:,: self.n_cols_to_filter,:] = mne.filter.filter_data(
+                data_array[:,: self.n_cols_to_filter,:],
+                sfreq=self.fs,
+                l_freq=self.bandpass_low,
+                h_freq=self.bandpass_high,
+                filter_length="auto",
+                verbose=False
+            )
 
 
+            return data_array
 
+        except Exception as e:
+            logger.error(f"Filtering failed: {str(e)}")
+            raise
 
-    data = []
-    label_list = []
-    subject_label_list = []
-    validation_weights = []
-    for window, label ,subject_label in results:
-        window_split = window.copy()
-        val_weights = [
-            x[validation_idx,:].copy().mean() for x in window
-            ]
+    def _crop_signals(
+            self,
+            data,
+            crop_range=None
+            ) -> np.ndarray:
+        
+        """
+        Crops each trial in a batch of EEG signals to a specific time window.
 
+        This function takes a 3D array shaped (trials × channels × time) and trims 
+        each trial to a window defined by `crop_range`, which should be a tuple like 
+        (start_sec, end_sec). It converts those seconds into frames using the sampling 
+        rate (`self.fs`) and slices the data along the time axis.
 
-        data.extend(window_split)    
-        validation_weights.extend(val_weights)            
-        label_list.extend(label)
-        subject_label_list.extend(subject_label)
+        Make sure the crop range is within the actual signal length — otherwise it’ll 
+        throw an assertion error. Also returns the data with the same shape format, 
+        just shorter in time.
 
+        Args:
+            data (np.ndarray): The batched EEG input to crop.
+            crop_range (tuple): A pair of floats (start_sec, end_sec) that define the 
+                                segment to keep in each trial.
 
-        WINDOW_LEN = len(window)
+        Returns:
+            np.ndarray: Cropped EEG data of shape (trials × channels × new_time).
+        """
+        assert bool(crop_range) and all(bool(i) for i in crop_range ) , "crop_range has to be a tuple with two valid floats (start_second , end_second)"
+        start_sec , end_sec = crop_range
+        start_frame , end_frame = int(start_sec*self.fs) , int(end_sec*self.fs)
+        _ , _ , n_times = data.shape
+        assert start_frame>=0 and end_frame <= n_times , f"crop range_start has to be >=0 seconds and range_end has to be <= {n_times//self.fs} seconds"
 
-    data = np.asarray(data)
-    labels = np.asarray(label_list)
-    subject_labels = np.asarray(subject_label_list)
-    validation_weights = np.asarray(validation_weights)
+        return data[:,:,start_frame:end_frame]
+    def apply_preprocessing(
+            self,
+            data,
+            labels,
+            subject_ids,
+            ) -> Tuple[np.ndarray]:
+        
 
-    return data,validation_weights, labels,subject_labels , WINDOW_LEN
+        """
+        Main preprocessing pipeline for EEG data.
+
+        This is the central function that orchestrates all preprocessing steps. It applies
+        a sequence of transformations to raw EEG trials in a fixed order to prepare the 
+        data for training or inference. All other helper functions (_apply_filter, 
+        _crop_signals, _window_data, _zscore_except_channels) are called from here.
+
+        The pipeline follows this sequence:
+            1. Apply bandpass filtering (if enabled).
+            2. Crop the signal in time using `crop_range` (if provided).
+            3. Segment each trial into overlapping windows.
+            4. Apply z-score normalization to each window, except on specified channels.
+            5. Compute window-level weights based on the average value of the last channel 
+            (assumed to be a 'validation' or signal quality indicator).
+
+        NOTE:
+            - Input `data` must have shape (n_trials, n_channels, n_times).
+            - Make sure your input channels are ordered correctly, especially if using 
+            bandpass filtering or channel-specific normalization.
+            - This function returns preprocessed data, updated labels/subject IDs per window, 
+            and computed weights for each window.
+
+        Args:
+            data (np.ndarray): Raw EEG data of shape (n_trials, n_channels, n_times).
+            labels (np.ndarray): Trial-level labels.
+            subject_ids (np.ndarray): Subject ID per trial.
+
+        Returns:
+            Tuple[np.ndarray]: A tuple of:
+                - normalized_windows: preprocessed EEG windows,
+                - labels: repeated labels per window,
+                - subject_ids: repeated subject IDs per window,
+                - weights: window-level weights based on validation channel.
+            """
+        
+        assert data.shape.__len__()==3 , "provided dimention of the data should be 3 (n_trials , n_channels , n_times)"
+        data = np.copy(data)
+        filtered_data = self._apply_filter(data)
+
+        if self.crop_range is not None:
+            if self.crop_range[0] is None or self.crop_range[1] is None:
+                raise ValueError("if crop_range is passed ..It has to consist of 2 valid floats")
+            filtered_data = self._crop_signals(
+                data=filtered_data,
+                crop_range=self.crop_range
+            )
+
+        windows , labels , subject_ids = self._window_data(
+            filtered_data,
+            labels=labels,
+            subject_ids=subject_ids,
+            window_size=self.window_size,
+            window_stride=self.window_stride
+            )
+        
+        normalized_windows = self._zscore_except_channels(
+            windows,
+            ignored_ch=self.idx_to_ignore_normalization,
+            axis = 2,
+            )
+        weights = normalized_windows[:,-1,:].mean(axis = -1) #mean of validation column (assumed to be placed last)
+        return normalized_windows , labels , subject_ids , weights

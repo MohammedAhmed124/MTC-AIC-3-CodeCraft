@@ -17,7 +17,7 @@ joblib
 tqdm
 glob2
 
-# PyTorch Stack
+
 torch==2.7.1
 torchvision==0.22.1
 torchaudio==2.7.1
@@ -26,7 +26,28 @@ torchview==0.2.7
 torchvis==0.2.0
 torchviz==0.0.3
 
-# MNE
+
 mne==1.9.0
 mne-features==0.3
 
+
+tensorboard==2.19.0
+
+
+pywavelets==1.8.0
+pooch==1.8.2
+pillow==11.3.0
+
+
+entmax==1.3
+sparsemax==0.1.9
+
+
+triton==3.3.1
+
+
+optuna==4.4.0
+
+
+
+polars==1.31.0

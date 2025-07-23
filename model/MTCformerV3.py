@@ -5,63 +5,26 @@ from scipy import signal
 import math
 import argparse
 import sys
+from entmax import sparsemax, entmax15 , entmax_bisect
+
+class SparsemaxLayer(nn.Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return sparsemax(x, dim=self.dim)
 
 
-class ConvolutionalAttentionBlock(nn.Module):
-    """
-    ConvolutionalAttentionBlock implements a convolution-inspired alternative to self-attention, 
-    inspired by the SSVEPFormer architecture.
-
-     Overview:
-    This block replaces classical token-wise attention with temporal convolution, followed by 
-    feedforward processing, using residual connections and LayerNorm.
-
-     Input shape:
-        x: Tensor of shape [B, proj_dim, n_times], where:
-            - B: Batch size
-            - proj_dim: Number of input/output channels (features)
-            - n_times: Temporal length of the signal (time dimension)
-
-     Architecture:
-    1. LayerNorm over time axis: 
-       - Normalizes each time point across all channels.
-    2. Temporal convolution over time:
-       - Uses a grouped conv (`groups=1`) to mix local temporal features.
-       - This acts like a local attention over time (temporal receptive field).
-    3. GELU + Dropout + Residual Connection
-        – Uses the Gaussian Error Linear Unit (GELU) activation.
-        – Dropout is applied for regularization.
-        – A residual connection (skip connection) helps stabilize training and enables deeper architectures by mitigating vanishing gradients.
-
-    4. LayerNorm again + Feedforward Linear Layer over time axis:
-       - Projects time features independently per channel.
-    5. Final GELU + Dropout + Residual
-
-     Purpose:
-        -Capture short-range temporal dependencies in EEG signals using convolutions instead of traditional attention mechanisms.
-
-        -Use temporal convolutional filters to efficiently learn local patterns over time.
-
-        -Employ residual connections to stabilize training, preserve signal identity, and ensure effective gradient flow.
-
-        -Avoid the high computational cost associated with traditional self-attention layers.
-
-        -Most importantly, this approach has shown to achieve strong performance in practice.
-
-     Linked to Convolutional Attention:
-    - Instead of learning attention weights explicitly (like in Transformers), 
-      the convolution here acts as a fixed-size temporal attention window.
-    - It mimics attention behavior by locally aggregating information over time using filters.
-
-    Inspired from: SSVEPFormer.
-    """
+class GatedConvolutionalBlock(nn.Module):
     def __init__(
-            self,
-            proj_dim,
-            n_times,
-            kernel_size,
-            dropout
-            ):
+        self,
+        proj_dim,
+        n_times,
+        kernel_size,
+        dropout,
+        k
+        ):
         super().__init__()
         self.norm_1 = nn.LayerNorm(n_times) 
         self.conv=nn.Conv1d(proj_dim, proj_dim, kernel_size=kernel_size, padding="same", groups=1)
@@ -70,12 +33,23 @@ class ConvolutionalAttentionBlock(nn.Module):
         self.dropout_1 = nn.Dropout(dropout)
 
         self.norm_2 = nn.LayerNorm(n_times)
-        self.feedforward = nn.Linear(n_times,n_times)
-        self.activation_2 = nn.GELU()
-        self.dropout_2 = nn.Dropout(dropout)
-    
-    def forward(self, x):  # x: [B, proj_dim, n_times]
-        residual = x
+
+
+        self.mask_layer_norm = nn.LayerNorm(n_times) 
+        self.mask_conv = nn.Conv1d(proj_dim, proj_dim, kernel_size=kernel_size, padding="same", groups=1)
+        self.pooler = nn.Linear(n_times , 1)
+        self.mask_sigmoid = SparsemaxLayer(1)
+        self.mask_dropout = nn.Dropout(dropout)
+
+    def forward(self, x , prior=None):  
+        mask_path = self.mask_layer_norm(x)
+        mask_path = self.mask_conv(mask_path)
+        mask_weigths = self.mask_sigmoid(self.pooler(mask_path))
+        mask_weigths = self.mask_dropout(mask_weigths)
+        if prior is None:
+            prior = torch.ones_like(mask_weigths)
+
+        residual = x * (mask_weigths * prior)
         
         x = self.norm_1(x)
 
@@ -83,17 +57,83 @@ class ConvolutionalAttentionBlock(nn.Module):
 
         x = self.activation_1(x)
         x = self.dropout_1(x)
-        x = x + residual                       # Residual connection
+        x = x + residual   
+
+        return x   ,  mask_weigths , prior     
+
+class ConvolutionalAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        proj_dim,
+        n_times,
+        kernel_size,
+        dropout,
+        k
+    ):
+        super().__init__()
+        
+        
+        self.gated_conv_1 = GatedConvolutionalBlock(
+            proj_dim=proj_dim,
+            n_times=n_times,
+            kernel_size=kernel_size,
+            dropout=dropout,
+            k=k  
+        )
+        self.gated_conv_2 = GatedConvolutionalBlock(
+            proj_dim=proj_dim,
+            n_times=n_times,
+            kernel_size=kernel_size,
+            dropout=dropout,
+            k=k  
+        )
+
+        self.gated_conv_3 = GatedConvolutionalBlock(
+            proj_dim=proj_dim,
+            n_times=n_times,
+            kernel_size=kernel_size,
+            dropout=dropout,
+            k=k  
+        )
+
+        
+        self.norm_2 = nn.LayerNorm(n_times)
+        self.feedforward = nn.Sequential(
+            nn.Linear(n_times, k, bias=False),
+            nn.Linear(k, n_times)
+        )
+        self.activation_2 = nn.GELU()
+        self.dropout_2 = nn.Dropout(dropout)
+
+    def forward(self, x, prior=None):  
+        x1 , x1_weights , prior_x1 = self.gated_conv_1(x, prior=prior)
+
+        prior_next = prior_x1*(1-x1_weights)
+
+        x2 , x2_weights , prior_x2= self.gated_conv_2(x, prior=prior_next)
+
+        prior_next= prior_x2*(1-x2_weights)
+
+        x3 , x3_weights , prior_x3 = self.gated_conv_3(x, prior=prior_next)
+
+        prior_next= prior_x3*(1-x3_weights)
+
+        x = (x1 + x2 ) / 2.0
+
+        self.last_gates = torch.stack([
+        x1_weights.detach(), 
+        x2_weights.detach(), 
+        x3_weights.detach()
+    ])
 
         residual = x
         x = self.norm_2(x)
-        x = self.feedforward(x)               
+        x = self.feedforward(x)
         x = self.activation_2(x)
         x = self.dropout_2(x)
-        x = x + residual                       # Residual connection
+        x = x + residual
 
         return x
-
 
 class ConvolutionalAttention(nn.Module):
     """
@@ -122,7 +162,8 @@ class ConvolutionalAttention(nn.Module):
             proj_dim,
             n_times,
             kernel_size,
-            dropout
+            dropout,
+            k
             ):
         super().__init__()
 
@@ -131,7 +172,8 @@ class ConvolutionalAttention(nn.Module):
                 proj_dim,
                 n_times,
                 kernel_size,
-                dropout
+                dropout,
+                k
             )
 
             for _ in range(depth)
@@ -238,10 +280,12 @@ class DomainClassifier(nn.Module):
             proj_dim
             ):
         super().__init__()
+        red=10
         self.net = nn.Sequential(
+            nn.AdaptiveAvgPool1d(output_size=n_times // red),
             nn.Flatten(),
             nn.Dropout(dropout),
-            nn.Linear(n_times * proj_dim, class_num_domain * 6),
+            nn.Linear((n_times // red) * proj_dim, class_num_domain * 6),
             nn.LayerNorm(class_num_domain * 6),
             nn.GELU(),
             nn.Dropout(0.5),
@@ -430,22 +474,24 @@ class PointWiseConvolutionalBlock(nn.Module):
         parent.PointWiseConvolution = self.forward
 
 class MTCFormer(nn.Module):
-    def __init__(self,
-                 depth,
-                 kernel_size,
-                 n_times,
-                 chs_num,
-                 eeg_ch_nums,
-                 class_num,
-                 class_num_domain,
-                 modulator_kernel_size=5,
-                 domain_dropout=0.5,
-                 modulator_dropout=0.5,
-                 mid_dropout=0.6,
-                 output_dropout=0.4,
-                 weight_init_std = 0.01,
-                 weight_init_mean = 0.00,
-                 ):
+    def __init__(
+        self,
+        depth,
+        kernel_size,
+        n_times,
+        chs_num,
+        eeg_ch_nums,
+        class_num,
+        class_num_domain,
+        modulator_kernel_size=5,
+        domain_dropout=0.5,
+        modulator_dropout=0.5,
+        mid_dropout=0.6,
+        output_dropout=0.4,
+        k = 30,
+        projection_dimention = 2,
+        seed = None,
+    ):
         
 
         """
@@ -524,6 +570,7 @@ class MTCFormer(nn.Module):
         """
             
         super().__init__()
+        self.seed = seed
         sensor_ch_nums = chs_num - eeg_ch_nums
         self.temporal_attention = TemporalModulator(
             eeg_ch_nums,
@@ -533,7 +580,7 @@ class MTCFormer(nn.Module):
             )
 
         output_chs = eeg_ch_nums
-        proj_dim = output_chs * 2
+        proj_dim = output_chs * projection_dimention
 
 
         PointWise_Conv = PointWiseConvolutionalBlock(
@@ -548,13 +595,15 @@ class MTCFormer(nn.Module):
             proj_dim,
             n_times,
             kernel_size,
-            mid_dropout
+            mid_dropout,
+            k = k
             )
-
+        red = 10
         self.mlp_head = nn.Sequential(
+            nn.AdaptiveAvgPool1d(output_size=n_times // red),
             nn.Flatten(),
             nn.Dropout(output_dropout),
-            nn.Linear(n_times * proj_dim, class_num * 6),
+            nn.Linear((n_times // red) * proj_dim, class_num * 6),
             nn.LayerNorm(class_num * 6),
             nn.GELU(),
             nn.Dropout(0.5),
@@ -568,12 +617,16 @@ class MTCFormer(nn.Module):
             proj_dim=proj_dim
         )
 
-        for m in self.modules():
-            if isinstance(m, (nn.Conv1d, nn.Linear)):
-                nn.init.normal_(m.weight, mean=weight_init_mean, std=weight_init_std)
+        self.init_weights_with_seed(seed)
 
 
-    def forward(self, x,domain_lambda):
+    def forward(
+            self,
+            x,
+            domain_lambda=0.0
+            ):
+        
+
         x = self.temporal_attention(x)       
         x = self.PointWiseConvolution(x)
         x_shared = self.transformer(x)  
@@ -583,3 +636,27 @@ class MTCFormer(nn.Module):
         label_output =  self.mlp_head(x_shared)
         return label_output , domain_output
 
+
+    def init_weights_with_seed(self, seed=None,reset_everything=False):
+        if seed is not None:
+            rng_state = torch.get_rng_state()
+            torch.manual_seed(seed)
+
+        for name, m in self.named_modules():
+            if isinstance(m, (nn.Conv1d, nn.Linear)):
+                if 'temporal_attention' in name:
+                    # Sigmoid -> Xavier init is best
+                    nn.init.xavier_normal_(m.weight)
+                else:
+                    
+                    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+
+            elif hasattr(m, 'reset_parameters'):
+                if reset_everything:
+                    m.reset_parameters()
+
+        if seed is not None:
+            torch.set_rng_state(rng_state)
