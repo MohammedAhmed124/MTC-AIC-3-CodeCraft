@@ -1,4 +1,4 @@
-# MTC-AIC-3 Winning pipeline 🥇
+# MTC-AIC-3 Winning pipeline 2025 🥇
 
 This repository provides the complete, end‑to‑end winning pipeline for the MTC-AIC-3 EEG competition. It covers data loading, preprocessing, model training, and inference for both Motor Imagery (MI) and SSVEP tasks using the custom MTCFormer architecture.
 
