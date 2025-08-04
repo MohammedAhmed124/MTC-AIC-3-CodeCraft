@@ -7,13 +7,45 @@ import argparse
 import sys
 from entmax import sparsemax, entmax15 , entmax_bisect
 
+
+
 class SparsemaxLayer(nn.Module):
+    """
+    Sparsemax activation layer.
+
+    Sparsemax is an alternative to softmax that encourages sparsity in the output
+    (i.e., it outputs exact zeros for less relevant features).
+
+    Equation:
+        Given an input vector z ∈ ℝ^K, sparsemax is defined as the Euclidean projection 
+        of z onto the probability simplex:
+
+            sparsemax(z) = argmin_p ||p - z||^2
+                            s.t.  p ∈ Δ^K
+
+        where Δ^K = {p ∈ ℝ^K | p ≥ 0, Σp_i = 1}
+
+    Compared to softmax:
+        - Both produce outputs that sum to 1.
+        - Softmax outputs are always dense (all values > 0).
+        - Sparsemax can produce sparse outputs (some values = 0).
+          and feature selection.
+
+    Use in Deep Learning:
+        - Introduced in "From Softmax to Sparsemax: A Sparse Model of Attention" (2016).
+        - Became popular through the 2022 TabNet architecture, where it helped in learning
+          sparse, interpretable masks over features at each decision step.
+
+    Args:
+        dim (int): The dimension along which to apply sparsemax (default: -1).
+        """
     def __init__(self, dim=-1):
         super().__init__()
         self.dim = dim
 
     def forward(self, x):
         return sparsemax(x, dim=self.dim)
+
 
 class ConvolutionalAttentionBlock(nn.Module):
     """
