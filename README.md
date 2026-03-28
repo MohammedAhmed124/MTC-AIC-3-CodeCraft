@@ -134,3 +134,6 @@ This project was developed and tested under the following setup:
 - **cuDNN Version:** 9.5.1  
 
 ---
+## **Project Recognition**
+This repository secured **1st Place** in the **ICMTC AIC 3** Competition.
+[LinkedIn](https://www.linkedin.com/posts/mohammed-a-metwally-aa626532b_appliedinnovationcenter-militarytechnicalcollege-activity-7357003725850247168-jjLx)
